@@ -13,3 +13,20 @@ With a real Google Cloud OAuth web client:
 7. Check /api/auth/get-access-token, /refresh-token and /account-info return 404, even with a session. Verify the browser receives no OAuth tokens.
 
 References: [Better Auth Google](https://www.better-auth.com/docs/authentication/google), [OAuth](https://www.better-auth.com/docs/concepts/oauth), [Google OAuth expiration](https://developers.google.com/identity/protocols/oauth2#expiration).
+
+## Adapter contracts and remaining live checks
+
+- Use `eventIdForBooking(bookingId)` from the server-only calendar module as the
+  optional event `id`. SHA-256 lowercase hex uses Google's base32hex alphabet;
+  reuse the same booking id across retries. Duplicate creates return that id.
+  Updates use PATCH with absolute values; repeated deletes accept 404 and 410.
+- Better Auth 1.7.25 returns `FAILED_TO_GET_ACCESS_TOKEN` for every refresh failure,
+  including transient endpoint failures. We retry once before requesting reconnect;
+  this ambiguity cannot be eliminated without owning the refresh implementation.
+- Verify with a real account how Google keys `primary` in free/busy responses.
+  Verify the 50-calendar free/busy expansion limit and supported time-range limits;
+  callers must split larger queries. These checks have not been run live.
+- Admission uses 1.7.25's redirect-aware `user.validateUserInfo` for fresh Google
+  identity on sign-in and linking, plus database user/session creation guards.
+  An account-create hook cannot validate a different linked email: the account
+  data has no email, and the owner's email is not the linked identity.

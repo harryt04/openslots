@@ -1,3 +1,4 @@
+import 'server-only'
 import {
   CalendarAuthError,
   type Calendar,
@@ -63,14 +64,19 @@ export class FakeCalendarProvider implements CalendarProvider {
                 start: e.event.start.dateTime,
                 end: e.event.end.dateTime,
               })),
-          ].filter((i) => i.start < to && i.end > from),
+          ].filter(
+            (i) =>
+              Date.parse(i.start) < Date.parse(to) &&
+              Date.parse(i.end) > Date.parse(from),
+          ),
         ),
       ]),
     )
   }
   async createEvent(calendarId: string, event: CalendarEvent) {
     const state = this.state(),
-      id = crypto.randomUUID()
+      id = event.id ?? crypto.randomUUID()
+    if (state.events[id]) return { id }
     state.events[id] = { calendarId, event: structuredClone(event) }
     state.operations.push({
       kind: 'create',

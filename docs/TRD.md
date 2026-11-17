@@ -146,7 +146,7 @@ Admin actions (S2 to S7) use Next.js server actions or route handlers behind the
 - OAuth tokens encrypted at rest; never logged; never sent to the browser.
 - The publishable key grants only: read business, read slots, create a booking, and manage a booking with its token.
 - Manage tokens are single-booking, unguessable, stored hashed.
-- `OPENSLOTS_ALLOWED_EMAILS` (comma-separated, optional) restricts who may sign in to an instance. When unset, any Google account may sign in; the self-host guide says so plainly.
+- `OPENSLOTS_ALLOWED_EMAILS` (comma-separated, optional) restricts who may sign in to an instance. It is checked at sign-in/linking only; removing an email does not terminate existing sessions. Google emails must be verified. When unset, any Google account may sign in; the self-host guide says so plainly.
 - Customer data held: name, email, optional phone and notes. No tracking of customers; PostHog is off by default and never loaded on booking pages or by the npm package.
 - Standard headers: CSP on app pages, `frame-ancestors` relaxed only for booking pages.
 

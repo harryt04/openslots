@@ -34,14 +34,63 @@ export const auth = betterAuth({
         'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
         'https://www.googleapis.com/auth/calendar.events',
       ],
-      mapProfileToUser(profile) {
-        if (!isEmailAllowed(profile.email)) {
-          throw new APIError('FORBIDDEN', {
-            code: 'EMAIL_NOT_ALLOWED',
-            message: 'This Google account is not allowed on this instance.',
-          })
-        }
-        return {}
+    },
+  },
+  disabledPaths: ['/get-access-token', '/refresh-token', '/account-info'],
+  // 1.7.25 invokes this inside the redirect-aware sign-in AND linking paths.
+  // Use fresh provider identity, not the owner's email when linking another account.
+  user: {
+    validateUserInfo({ user, source }) {
+      if (
+        source.method === 'oauth' &&
+        (!user.emailVerified || !isEmailAllowed(String(user.email ?? '')))
+      ) {
+        return { error: 'EMAIL_NOT_ALLOWED' }
+      }
+    },
+  },
+  databaseHooks: {
+    user: {
+      create: {
+        before: async (user) => {
+          if (
+            !isEmailAllowed(user.email) ||
+            (!isFakeGoogle() && !user.emailVerified)
+          ) {
+            throw new APIError('FORBIDDEN', {
+              code: 'EMAIL_NOT_ALLOWED',
+              message: 'Account not allowed.',
+            })
+          }
+        },
+      },
+    },
+    session: {
+      create: {
+        before: async (session, context) => {
+          const user = await context?.context.internalAdapter.findUserById(
+            session.userId,
+          )
+          if (!user || !isEmailAllowed(user.email)) {
+            throw new APIError('FORBIDDEN', {
+              code: 'EMAIL_NOT_ALLOWED',
+              message: 'Account not allowed.',
+            })
+          }
+        },
+        after: async (session, context) => {
+          if (!isFakeGoogle() || !context) return
+          const accounts = await context.context.internalAdapter.findAccounts(
+            session.userId,
+          )
+          if (!accounts.some((account) => account.providerId === 'google')) {
+            await context.context.internalAdapter.createAccount({
+              userId: session.userId,
+              providerId: 'google',
+              accountId: session.userId,
+            })
+          }
+        },
       },
     },
   },

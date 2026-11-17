@@ -1,6 +1,12 @@
 export type Interval = { start: string; end: string }
-export type Calendar = { id: string; summary: string; accessRole?: string }
+export type Calendar = {
+  id: string
+  summary: string
+  accessRole?: string
+  primary?: boolean
+}
 export type CalendarEvent = {
+  id?: string
   summary: string
   description?: string
   start: { dateTime: string; timeZone?: string }
@@ -29,7 +35,10 @@ export class CalendarAuthError extends Error {
   }
 }
 export class CalendarError extends Error {
-  constructor(public readonly status: number) {
+  constructor(
+    public readonly status: number,
+    public readonly reason?: string,
+  ) {
     super('Calendar request failed.')
     this.name = 'CalendarError'
   }

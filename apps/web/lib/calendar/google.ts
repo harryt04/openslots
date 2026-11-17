@@ -1,3 +1,4 @@
+import 'server-only'
 import {
   CalendarAuthError,
   CalendarError,
@@ -21,6 +22,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
     const response = await this.request(
       'https://www.googleapis.com/calendar/v3/' + path,
       {
+        signal: AbortSignal.timeout(15_000),
         method,
         cache: 'no-store',
         headers: {
@@ -29,9 +31,29 @@ export class GoogleCalendarProvider implements CalendarProvider {
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
       },
-    )
+    ).catch(() => {
+      throw new CalendarError(503)
+    })
     if (response.status === 401) throw new CalendarAuthError()
-    if (!response.ok) throw new CalendarError(response.status)
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}))
+      const reasons =
+        detail.error?.errors?.map(
+          (error: { reason: string }) => error.reason,
+        ) ?? []
+      if (
+        response.status === 403 &&
+        (reasons.some((reason: string) =>
+          ['insufficientPermissions', 'forbidden'].includes(reason),
+        ) ||
+          detail.error?.status === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT')
+      )
+        throw new CalendarAuthError()
+      throw new CalendarError(
+        response.status,
+        reasons.includes('duplicate') ? 'duplicate' : undefined,
+      )
+    }
     return response.status === 204 ? (undefined as T) : response.json()
   }
   async listCalendars() {
@@ -43,7 +65,14 @@ export class GoogleCalendarProvider implements CalendarProvider {
           'users/me/calendarList' +
             (page ? '?pageToken=' + encodeURIComponent(page) : ''),
         )
-      calendars.push(...(result.items ?? []))
+      calendars.push(
+        ...(result.items ?? []).map(({ id, summary, accessRole, primary }) => ({
+          id,
+          summary,
+          accessRole,
+          primary,
+        })),
+      )
       page = result.nextPageToken
     } while (page)
     return calendars
@@ -73,13 +102,34 @@ export class GoogleCalendarProvider implements CalendarProvider {
       '?sendUpdates=all'
     )
   }
-  createEvent(calendarId: string, event: CalendarEvent) {
-    return this.call<{ id: string }>(this.path(calendarId), 'POST', event)
+  async createEvent(calendarId: string, event: CalendarEvent) {
+    try {
+      return await this.call<{ id: string }>(
+        this.path(calendarId),
+        'POST',
+        event,
+      )
+    } catch (error) {
+      if (
+        event.id &&
+        error instanceof CalendarError &&
+        error.status === 409 &&
+        error.reason === 'duplicate'
+      )
+        return { id: event.id }
+      throw error
+    }
   }
   async updateEvent(calendarId: string, eventId: string, event: CalendarEvent) {
     await this.call(this.path(calendarId, eventId), 'PATCH', event)
   }
   async deleteEvent(calendarId: string, eventId: string) {
-    await this.call(this.path(calendarId, eventId), 'DELETE')
+    try {
+      await this.call(this.path(calendarId, eventId), 'DELETE')
+    } catch (error) {
+      if (error instanceof CalendarError && [404, 410].includes(error.status))
+        return
+      throw error
+    }
   }
 }

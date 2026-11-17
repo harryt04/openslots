@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+vi.mock('server-only', () => ({}))
 import { GoogleCalendarProvider } from './google'
 import { FakeCalendarProvider, seedFakeCalendar } from './fake'
 import { CalendarAuthError, CalendarError } from './types'
@@ -118,4 +119,87 @@ describe('shared fake calendar', () => {
       CalendarAuthError,
     )
   })
+})
+
+it.each([
+  'insufficientPermissions',
+  'forbidden',
+  'ACCESS_TOKEN_SCOPE_INSUFFICIENT',
+  'rateLimitExceeded',
+  'userRateLimitExceeded',
+])('classifies Google 403 %s', async (reason) => {
+  const request = vi
+    .fn<typeof fetch>()
+    .mockResolvedValue(
+      Response.json(
+        { error: { status: reason, errors: [{ reason }] } },
+        { status: 403 },
+      ),
+    )
+  await expect(
+    new GoogleCalendarProvider(async () => 'token', request).listCalendars(),
+  ).rejects.toBeInstanceOf(
+    reason.includes('Rate') || reason === 'rateLimitExceeded'
+      ? CalendarError
+      : CalendarAuthError,
+  )
+})
+it.each([404, 410])('delete tolerates missing event %s', async (status) => {
+  await new GoogleCalendarProvider(
+    async () => 'token',
+    vi.fn().mockResolvedValue(new Response(null, { status })),
+  ).deleteEvent('primary', 'gone')
+})
+it('retries create with a stable event id without duplicating fake events', async () => {
+  const provider = new GoogleCalendarProvider(
+    async () => 'token',
+    vi
+      .fn()
+      .mockResolvedValue(
+        Response.json(
+          { error: { errors: [{ reason: 'duplicate' }] } },
+          { status: 409 },
+        ),
+      ),
+  )
+  expect(
+    await provider.createEvent('primary', { ...event, id: 'abc123' }),
+  ).toEqual({ id: 'abc123' })
+  const state = seedFakeCalendar('retry')
+  const fake = new FakeCalendarProvider('retry')
+  await fake.createEvent('primary', { ...event, id: 'abc123' })
+  await fake.createEvent('primary', { ...event, id: 'abc123' })
+  expect(Object.keys(state.events)).toHaveLength(1)
+  await fake.deleteEvent('primary', 'abc123')
+  await fake.deleteEvent('primary', 'abc123')
+})
+it('compares mixed offset intervals as instants', async () => {
+  seedFakeCalendar('offset', {
+    busy: {
+      primary: [
+        {
+          start: '2026-12-01T12:00:00+02:00',
+          end: '2026-12-01T13:00:00+02:00',
+        },
+      ],
+    },
+  })
+  expect(
+    (
+      await new FakeCalendarProvider('offset').freeBusy(
+        ['primary'],
+        '2026-12-01T10:30:00Z',
+        '2026-12-01T11:30:00Z',
+      )
+    ).primary,
+  ).toHaveLength(1)
+})
+it('passes a deadline and treats timeouts as transient', async () => {
+  const request = vi
+    .fn<typeof fetch>()
+    .mockRejectedValue(new DOMException('Timeout', 'TimeoutError'))
+  await expect(
+    new GoogleCalendarProvider(async () => 'token', request).listCalendars(),
+  ).rejects.toBeInstanceOf(CalendarError)
+  expect(request.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal)
 })
