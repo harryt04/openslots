@@ -55,14 +55,13 @@ jobs:
   docker:
     name: Docker image
     runs-on: ubuntu-latest
+    env:
+      # docker compose needs these for every command, not only `up`.
+      GOOGLE_CLIENT_ID: ci-placeholder
+      GOOGLE_CLIENT_SECRET: ci-placeholder
     steps:
       - uses: actions/checkout@v4
       - name: Build and start with docker compose
-        env:
-          BETTER_AUTH_SECRET: ci-secret-min-32-chars-long!!!!!!
-          BETTER_AUTH_URL: http://localhost:3000
-          GOOGLE_CLIENT_ID: ci-placeholder
-          GOOGLE_CLIENT_SECRET: ci-placeholder
         run: docker compose up -d --build --wait --wait-timeout 300
       - name: Smoke test the running container
         run: |
@@ -96,4 +95,3 @@ jobs:
       - name: Logs on failure
         if: failure()
         run: docker compose logs --no-color | tail -200
-
