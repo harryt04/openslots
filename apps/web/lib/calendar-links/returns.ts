@@ -56,6 +56,28 @@ export async function finishReturn(
   const candidates = intent.accountId
     ? accounts.filter((a) => a.id === intent.accountId)
     : accounts.filter((a) => !intent.snapshot.includes(a.id))
-  if (candidates.length !== 1) return
-  return refreshLink(business, candidates[0]!.id, '')
+  // Say why nothing was connected, so a silent return is not mistaken for
+  // success.
+  if (candidates.length === 0)
+    return {
+      ok: false,
+      message: intent.accountId
+        ? 'That Google account is no longer linked to your sign-in. Link it again.'
+        : 'That Google account was already yours. Use Connect beside it to add it to this business.',
+    } as const
+  if (candidates.length > 1)
+    return {
+      ok: false,
+      message:
+        'Several Google accounts were added at once. Use Connect beside the one you want.',
+    } as const
+  try {
+    return await refreshLink(business, candidates[0]!.id, '')
+  } catch {
+    return {
+      ok: false,
+      message:
+        'The account was added, but its calendars could not be read. Try Refresh.',
+    } as const
+  }
 }

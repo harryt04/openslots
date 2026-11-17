@@ -200,3 +200,43 @@ it('uses the linked identity id-token email instead of the owner email', async (
     'second@example.test',
   )
 })
+it('keeps the booking calendar while its account only needs a reconnect', async () => {
+  const { business, accountId, provider, db } = await fixture()
+  // A second, healthy account linked to the same business.
+  const second = new ObjectId()
+  await db
+    .collection('account')
+    .insertOne({ _id: second, userId: 'owner', providerId: 'google' })
+  const { FakeCalendarProvider, seedFakeCalendar } =
+    await import('../calendar/fake')
+  seedFakeCalendar(String(second))
+  await repo.refreshLink(
+    business,
+    String(second),
+    '',
+    new FakeCalendarProvider(String(second)),
+  )
+  const chosen = (await businesses.getBusinessForUser(
+    'owner',
+    String(business._id),
+  ))!.bookingCalendar
+  expect(chosen?.accountId).toBe(accountId)
+
+  await repo.markNeedsReconnect(business._id, accountId)
+  expect(await repo.repairBookingCalendar(business)).toBe(false)
+  const broken = (await businesses.getBusinessForUser(
+    'owner',
+    String(business._id),
+  ))!
+  // Bookings are not silently sent to the other account: fail closed instead.
+  expect(broken.bookingCalendar).toEqual(chosen)
+  expect((await repo.calendarAvailability(broken)).ok).toBe(false)
+
+  await repo.refreshLink(business, accountId, '', provider)
+  const recovered = (await businesses.getBusinessForUser(
+    'owner',
+    String(business._id),
+  ))!
+  expect(recovered.bookingCalendar).toEqual(chosen)
+  expect((await repo.calendarAvailability(recovered)).ok).toBe(true)
+})

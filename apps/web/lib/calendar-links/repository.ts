@@ -266,6 +266,20 @@ export async function repairBookingCalendar(business: BusinessDoc) {
     )
   )
     return false
+  // A broken connection is not a reason to send bookings somewhere else. If
+  // the chosen calendar's account only needs a reconnect, keep the choice:
+  // availability fails closed and the page says "Needs reconnect" until the
+  // owner fixes it, and their choice is still there afterwards (S6-3).
+  if (
+    old &&
+    all.some(
+      (l) =>
+        l.accountId === old.accountId &&
+        l.status === 'needs_reconnect' &&
+        l.calendars.some((c) => c.calendarId === old.calendarId && c.writable),
+    )
+  )
+    return false
   const candidates = [...all].sort(
     (a, b) =>
       Number(b.accountId === old?.accountId) -
@@ -275,7 +289,7 @@ export async function repairBookingCalendar(business: BusinessDoc) {
     (l) => l.status === 'ok' && l.calendars.some((c) => c.writable),
   )
   const calendar = link?.calendars.find((c) => c.writable)
-  await col.updateOne(
+  const result = await col.updateOne(
     {
       _id: business._id,
       ownerUserId: business.ownerUserId,
@@ -293,7 +307,8 @@ export async function repairBookingCalendar(business: BusinessDoc) {
         }
       : { $unset: { bookingCalendar: '' }, $set: { updatedAt: new Date() } },
   )
-  return Boolean(old)
+  // Only claim a move when this call made it and there was somewhere to go.
+  return Boolean(old) && result.matchedCount > 0 && Boolean(link && calendar)
 }
 
 export async function calendarAvailability(business: BusinessDoc) {
