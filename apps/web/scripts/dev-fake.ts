@@ -17,6 +17,16 @@ async function main() {
   const mongo = await MongoMemoryServer.create()
   const origin = `http://localhost:${port}`
 
+  // Create the indexes on the fresh database before the app starts. The
+  // modules read env at import time, so set it first and import after.
+  Object.assign(process.env, { NODE_ENV: 'development' })
+  process.env.MONGO_CONNECTION_STRING = mongo.getUri()
+  const { closeMongoClient, mongoDBConfig } =
+    await import('../lib/mongo-client')
+  const { createMongoDbIndexes } = await import('../lib/mongo-utils')
+  await createMongoDbIndexes(mongoDBConfig.dbName)
+  await closeMongoClient()
+
   console.log(`[dev:fake] in-memory MongoDB at ${mongo.getUri()}`)
   console.log(
     `[dev:fake] app at ${origin}, test sign-in at ${origin}/dev/sign-in`,

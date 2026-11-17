@@ -41,14 +41,61 @@ test('focus is shown with a 2px ring', async ({ page }) => {
   expect(outline).toBe('2px solid')
 })
 
-test('a signed-out visitor is sent to sign in, and the test sign-in works', async ({
+test('sign-in, onboarding, creating and switching businesses', async ({
   page,
 }) => {
   await page.goto('/')
   await expect(page).toHaveURL(/\/login$/)
 
-  await page.getByRole('link', { name: 'Use the test sign-in' }).click()
+  // A unique user, so parallel runs and reruns start with no business.
+  await page.goto('/dev/sign-in')
+  await page.getByLabel('Email').fill(`owner-${Date.now()}@example.test`)
   await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page).toHaveURL(/\/$/)
-  await expect(page.getByText('Welcome, Jordan Lee')).toBeVisible()
+
+  // S1-3: first sign-in lands on "name your business".
+  await expect(page).toHaveURL(/\/onboarding$/)
+  await expect(
+    page.getByRole('heading', { name: 'Name your business' }),
+  ).toBeVisible()
+  await page.getByLabel('Business name').fill('Shear Bliss Salon')
+  await expect(page.getByLabel('Booking page address')).toHaveValue(
+    'shear-bliss-salon',
+  )
+  const slug = `shear-${Date.now()}`
+  await page.getByLabel('Booking page address').fill(slug)
+  await page.getByRole('button', { name: 'Create business' }).click()
+
+  await expect(page).toHaveURL(/\/availability$/)
+  const nav = page.getByRole('link', { name: 'Availability' })
+  await expect(nav).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByText('1 business', { exact: true })).toBeVisible()
+
+  // Reserved words are refused inline.
+  await page.goto('/settings')
+  await page.getByLabel('Booking page address').fill('api')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect(page.getByText('That address is reserved')).toBeVisible()
+
+  // A second business, from the switcher.
+  await page.getByRole('button', { name: /Switch business/ }).click()
+  await page.getByRole('menuitem', { name: 'Add a business' }).click()
+  await expect(page).toHaveURL(/\/onboarding$/)
+  await page.getByLabel('Business name').fill('Second Shop')
+  await page.getByLabel('Booking page address').fill(`second-${Date.now()}`)
+  await page.getByRole('button', { name: 'Add business' }).click()
+  await expect(page).toHaveURL(/\/availability$/)
+  await expect(page.getByText('2 businesses', { exact: true })).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: /Business: Second Shop/ }),
+  ).toBeVisible()
+
+  // Switch back to the first.
+  await page.getByRole('button', { name: /Switch business/ }).click()
+  await page.getByRole('menuitem', { name: 'Shear Bliss Salon' }).click()
+  await expect(
+    page.getByRole('button', { name: /Business: Shear Bliss Salon/ }),
+  ).toBeVisible()
+  await expect(
+    page.getByText('Everything customers have booked with Shear Bliss Salon.'),
+  ).toBeVisible()
 })

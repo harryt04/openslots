@@ -55,7 +55,9 @@ Collections belong to the app database. Every document except Better Auth's has 
 | `bookings` | `businessId`, `serviceId`, service snapshot (`name`, `durationMin`, buffers), `start`, `end`, `status` (`pending`, `confirmed`, `cancelled`), `customer` `{name, email, phone?, notes?, timezone}`, `googleEventId?`, `manageTokenHash`, `rescheduledFrom?`, `origin?` | `{businessId, start}`; unique `manageTokenHash`; `{businessId, status, start}` |
 | `slot_locks` | `businessId`, `block` (integer: UTC epoch minutes ÷ 5), `bookingId` | **unique `{businessId, block}`**; `bookingId` |
 
-Index creation lives in a script (`pnpm run create-indexes`), as in the scaffold. The app must not start serving bookings if the `slot_locks` unique index is missing.
+`schedules.weekly[0]` is Sunday (as `Date.getDay()`); a new business gets one schedule, Monday to Friday 09:00 to 17:00 in its timezone. Publishable keys are `os_pk_` plus 24 random bytes, base64url. Slugs are global, 3 to 40 characters of `a-z0-9-`, and a reserved list of app routes is refused. Admin code reaches businesses only through `requireBusiness()` in `apps/web/lib/businesses/current.ts`, which re-validates the remembered business (cookie `openslots_business`) against `ownerUserId` on every call.
+
+Index creation lives in a script (`pnpm run create-indexes`, definitions in `apps/web/lib/mongo-utils.ts`), as in the scaffold; `pnpm run dev:fake` runs it on its fresh database. The app must not start serving bookings if the `slot_locks` unique index is missing.
 
 ## 4. Slot engine (`packages/core`)
 
