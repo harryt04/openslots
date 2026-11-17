@@ -1,0 +1,57 @@
+name: Release to npm
+
+# Publishes @openslots/core and @openslots/react. Manual only, and a dry run
+# unless you untick the box. See docs/RELEASING.md before the first use: the
+# npm scope and trusted publishing must be set up by the maintainer.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Dry run (pack and verify, publish nothing)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  # Lets npm verify this workflow as the publisher and attach provenance.
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish packages
+    runs-on: ubuntu-latest
+    # Only ever from the default branch.
+    if: github.ref == 'refs/heads/main'
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - name: Test and build the packages
+        run: |
+          pnpm --filter @openslots/core --filter @openslots/react run lint
+          pnpm --filter @openslots/core --filter @openslots/react run typecheck
+          pnpm --filter @openslots/core --filter @openslots/react run test
+          pnpm --filter @openslots/core --filter @openslots/react run build
+      - name: Check the versions are not already published
+        run: |
+          for dir in packages/core packages/react; do
+            name=$(node -p "require('./$dir/package.json').name")
+            version=$(node -p "require('./$dir/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "::error::$name@$version is already on npm. Bump the version first."
+              exit 1
+            fi
+            echo "$name@$version is new"
+          done
+      - name: Publish (dry run)
+        if: ${{ inputs.dry_run }}
+        run: pnpm --filter @openslots/core --filter @openslots/react publish --access public --no-git-checks --dry-run
+      - name: Publish
+        if: ${{ !inputs.dry_run }}
+        run: pnpm --filter @openslots/core --filter @openslots/react publish --access public --no-git-checks --provenance

@@ -1,6 +1,6 @@
 {
   "name": "@openslots/react",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "OpenSlots booking components for React.",
   "license": "MIT",
   "repository": {
@@ -70,5 +70,20 @@
       },
       "./styles.css": "./dist/styles.css"
     }
+  },
+  "homepage": "https://github.com/harryt04/openslots#readme",
+  "bugs": {
+    "url": "https://github.com/harryt04/openslots/issues"
+  },
+  "keywords": [
+    "booking",
+    "appointments",
+    "scheduling",
+    "google-calendar",
+    "react",
+    "self-hosted"
+  ],
+  "engines": {
+    "node": ">=20"
   }
 }

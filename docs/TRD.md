@@ -27,8 +27,8 @@ The starting point is the maintainer's scaffold at `github.com/harryt04/personal
 apps/web/                 Next.js app: admin, hosted booking pages, public API
   app/(dashboard)/        signed-in routes (S2–S7); layout guards the session
   app/login/              S1
-  app/b/[business]/       S8 hosted booking page, /b/[business]/[service]
-  app/m/[token]/          S10 manage a booking
+  app/(public)/b/[business]/   S8 hosted booking page, /b/[business]/[service]
+  app/(public)/m/[token]/      S10 manage a booking
   app/api/auth/[...all]/  Better Auth handler
   app/api/v1/             public API
   lib/                    auth, mongo client, google client, repositories
@@ -297,7 +297,8 @@ Admin actions (S2 to S7) use Next.js server actions or route handlers behind the
 - Layout responds to the component's own width with container queries on the `.openslots` root: three columns at 760px and above, stacked below with times as a wrapping grid (S9-1, S9-2). The root has `container-type: inline-size`, so it takes its width from its parent and must not be shrink-wrapped (for example as a bare flex item).
 - The hosted pages in `apps/web` consume this package from the workspace; they must not have a private copy of the booking UI. The app imports the TypeScript source and the compiled `dist/styles.css`; `dev`, `dev:fake` and `build` build the stylesheet first, and `dev:fake` keeps it rebuilt while running.
 - A gallery route in `apps/web` (`/dev/gallery`, development only) renders each component against an in-memory mock of the public API (`@openslots/react/testing`, workspace only, never published) in its states, inside a hostile pretend host page (C1), at a resizable width and in a 340px phone frame.
-- Published under the `@openslots` npm scope with provenance from CI. Publishing is a manual, maintainer-approved step.
+- Published under the `@openslots` npm scope with provenance from CI. Publishing is a manual, maintainer-approved step. The steps are in [RELEASING.md](RELEASING.md); the workflow is `.github/workflows/release.yml`, manual and a dry run by default.
+- `@openslots/core` imports zod as a namespace (`import * as z from 'zod'`). Importing the `z` object instead pulls every zod locale and its JSON-schema code into an embedder's bundle: 108 kB gzipped against 43 kB.
 
 ## 9. Security and privacy
 
@@ -318,10 +319,11 @@ Admin actions (S2 to S7) use Next.js server actions or route handlers behind the
 | `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` | yes | Auth |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | yes | Sign-in and calendar access |
 | `OPENSLOTS_ALLOWED_EMAILS` | no | Sign-in allowlist |
-| `NEXT_PUBLIC_POSTHOG_KEY`, `NEXT_PUBLIC_POSTHOG_HOST` | no | Analytics |
+| `NEXT_PUBLIC_POSTHOG_KEY` | no | Analytics on signed-in pages, page views only. Read at build time. Events go through this origin at `/ingest` to PostHog's US endpoint; there is no host setting |
 | `TRUSTED_PROXY_HOPS` | no | Default `0` means no per-IP limit; the per-key bucket is the only rate-limit protection. When set, the app must be reachable only through the proxy. App server clocks must agree. Count trusted hops from the right of X-Forwarded-For; use `1` behind one nginx/Coolify proxy that appends the client address. |
 | `API_SLOTS_IP_LIMIT`, `API_WRITE_IP_LIMIT` | no | Per-minute IP limits, defaults 60 and 10. Positive integers. |
 | `API_SLOTS_KEY_LIMIT`, `API_WRITE_KEY_LIMIT` | no | Separate per-minute key limits, defaults 600 and 100. Positive integers. |
+| `OPENSLOTS_AUTO_INDEX` | no | Set to `0` to stop the server creating MongoDB indexes at start |
 | `E2E_FAKE_GOOGLE` | no | Tests and local UI work only: use the in-memory calendar provider and enable the test sign-in at `/dev/sign-in` (the only time email and password sign-in exists). Must refuse to enable when `NODE_ENV=production`. `pnpm run dev:fake` sets it and starts an in-memory MongoDB |
 
 Booking reconciliation needs no new environment variables or worker process; it runs after API responses. Lease, provider deadlines and exponential retry bounds are internal constants; no new variables. Existing Google request bounds and proxy/rate-limit variables remain unchanged.
@@ -336,7 +338,8 @@ Booking reconciliation needs no new environment variables or worker process; it 
 
 ## 12. Deployment
 
-- `Dockerfile` for `apps/web` (Next.js standalone output) and a `docker-compose.yml` with the app and MongoDB for a one-command local or small-server install.
+- `Dockerfile` for `apps/web` (Next.js standalone output) and a `docker-compose.yml` with the app and MongoDB for a one-command local or small-server install. The image runs as a non-root user and has a health check on `/api/health`. CI builds it and smoke-tests the running container.
+- At start the server refuses to run in fake mode in production, then creates the MongoDB indexes (`apps/web/instrumentation.ts`). `OPENSLOTS_AUTO_INDEX=0` turns that off for operators who run `pnpm run create-indexes` themselves.
 - Works behind any reverse proxy; the maintainer deploys on Coolify.
 - `docs/self-hosting.md`: Google Cloud project and OAuth client (including publishing it), environment variables, first run, creating indexes, upgrading.
 

@@ -57,3 +57,53 @@ jobs:
           name: playwright-report
           path: apps/web/playwright-report
           retention-days: 7
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    env:
+      # docker compose needs these for every command, not only `up`.
+      GOOGLE_CLIENT_ID: ci-placeholder
+      GOOGLE_CLIENT_SECRET: ci-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start with docker compose
+        run: docker compose up -d --build --wait --wait-timeout 300
+      - name: Smoke test the running container
+        run: |
+          set -eux
+          check() { test "$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3000$1")" = "$2"; }
+          curl -fsS http://localhost:3000/api/health
+          check /login 200
+          check / 307
+          # Development-only routes do not exist in the image.
+          check /dev/tokens 404
+          check /dev/sign-in 404
+          check /dev/gallery 404
+          # Public pages and API answer without a business.
+          check /b/no-such-business 404
+          check /api/v1/business 401
+          # Indexes were created at start, including the booking lock index.
+          docker compose exec -T mongo mongosh --quiet openslots-production \
+            --eval 'if (!db.slot_locks.getIndexes().some(i => i.unique && i.key.businessId && i.key.block)) quit(1)'
+          # The image runs as a non-root user.
+          test "$(docker compose exec -T app id -u)" != "0"
+      - name: Fake mode is refused in production
+        run: |
+          # Not `set -e`: the container is expected to exit with an error.
+          set +e -u
+          # The server must exit by itself with the refusal message. `timeout`
+          # turns a server that starts anyway into a failure.
+          timeout 60 docker run --rm -e E2E_FAKE_GOOGLE=1 \
+            -e MONGO_CONNECTION_STRING=mongodb://127.0.0.1:27017 \
+            -e BETTER_AUTH_SECRET -e BETTER_AUTH_URL \
+            openslots:local > /tmp/fake.log 2>&1
+          status=$?
+          tail -20 /tmp/fake.log
+          if [ "$status" -eq 0 ] || [ "$status" -eq 124 ]; then
+            echo "The server started in fake mode in production (exit $status)"; exit 1
+          fi
+          grep -q "must not be set" /tmp/fake.log
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color | tail -200

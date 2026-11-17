@@ -2,7 +2,7 @@
  * Domain schemas shared by the app, the public API and `@openslots/react`.
  * See docs/TRD.md section 3 for the stored shape and PRD R3, R4 for the rules.
  */
-import { z } from 'zod'
+import * as z from 'zod'
 
 import { isLocalDate } from './time'
 

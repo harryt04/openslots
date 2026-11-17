@@ -20,6 +20,10 @@ export default defineConfig({
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',
   use: {
     baseURL,
+    // Tests read times and zone names off the page, so the browser's zone
+    // must not depend on the machine: CI runners are in UTC.
+    timezoneId: 'America/Denver',
+    locale: 'en-US',
     trace: 'retain-on-failure',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
