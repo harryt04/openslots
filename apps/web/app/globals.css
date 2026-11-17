@@ -64,6 +64,7 @@
 }
 
 .dark {
+  --brand-panel-foreground: var(--primary-foreground);
   --background: #0c0a1a;
   --foreground: #f3f0ff;
   --card: #141127;
