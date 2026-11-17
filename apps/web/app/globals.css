@@ -152,6 +152,9 @@
   }
   body {
     @apply bg-background text-foreground;
+    /* @openslots/react uses the system fonts unless the host names its own. */
+    --openslots-font-sans: var(--font-geist-sans);
+    --openslots-font-mono: var(--font-geist-mono);
   }
 }
 

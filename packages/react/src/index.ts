@@ -1,7 +1,40 @@
 /**
  * @openslots/react: BookingFlow, SlotPicker, ServiceList, hooks and a typed
- * client. Built in slice 3B; see docs/TRD.md section 8.
+ * client for the OpenSlots public API. See docs/TRD.md section 8.
+ *
+ * Import the styles once: `import '@openslots/react/styles.css'`.
  */
+export { BookingFlow } from './components/booking-flow'
+export type {
+  BookedResult,
+  BookingFlowProps,
+  BookingStep,
+} from './components/booking-flow'
+export { SlotPicker } from './components/slot-picker'
+export type { SelectedSlot, SlotPickerProps } from './components/slot-picker'
+export { ServiceList } from './components/service-list'
+export type { ServiceListProps } from './components/service-list'
+export { ROOT_CLASS } from './components/root'
+export type { Theme } from './components/root'
 
-/** Root class every style in this package is scoped under (design check C-4). */
-export const ROOT_CLASS = 'openslots'
+export { useBusiness, useSlots } from './hooks'
+export type { Connection, RequestState, UseSlotsOptions } from './hooks'
+
+export { createClient } from './client'
+export type { ClientOptions, OpenSlotsClient, RequestOptions } from './client'
+export { customerMessage, isOpenSlotsError, OpenSlotsError } from './errors'
+export type { OpenSlotsErrorCode } from './errors'
+
+export type {
+  ApiErrorCode,
+  BusinessResponse,
+  CreateBookingBody,
+  CreateBookingResponse,
+  CustomerFields,
+  ManageSummary,
+  PublicService,
+  RescheduleBody,
+  ServiceColor,
+  SlotsQuery,
+  SlotsResponse,
+} from '@openslots/core'

@@ -1,0 +1,344 @@
+/*
+ * @openslots/react styles: the source for dist/styles.css.
+ *
+ * Tailwind is a build-time tool here. scripts/build-css.mjs compiles this
+ * file with the `os:` prefix and then scopes every rule under `.openslots`,
+ * unwraps cascade layers, drops `@property` registrations and prefixes
+ * keyframes, so the published CSS cannot reach outside the component and
+ * the host page needs no Tailwind (C-1, C-4). See docs/TRD.md section 8.
+ *
+ * Colors (C-2): components use shadcn token names. Each one reads the
+ * host's variable first (`--primary`, `--accent`, ...) and falls back to the
+ * Voltage default below, so a shadcn host that defines its tokens makes the
+ * component match, and any other page gets Voltage. In this package
+ * `--accent` is the spec's tangerine (chosen slot, key call to action), not
+ * shadcn's quiet hover surface.
+ *
+ * This file and the compiled output are the only places in the package
+ * where a color value appears (T-1).
+ */
+@import 'tailwindcss/theme.css' layer(theme) prefix(os);
+@import 'tailwindcss/utilities.css' layer(utilities) source(none);
+
+@source '.';
+@source not './**/*.test.tsx';
+@source not './testing';
+
+@theme {
+  --*: initial;
+
+  /* Pixel units: a host's `html { font-size }` must not resize the widget. */
+  --spacing: 4px;
+
+  --font-sans: var(
+    --openslots-font-sans,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    Arial,
+    sans-serif
+  );
+  --font-mono: var(
+    --openslots-font-mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    'Liberation Mono',
+    monospace
+  );
+
+  --text-xs: 12px;
+  --text-xs--line-height: 1.5;
+  --text-sm: 13px;
+  --text-sm--line-height: 1.5;
+  --text-base: 14px;
+  --text-base--line-height: 1.5;
+  --text-lg: 16px;
+  --text-lg--line-height: 1.4;
+  --text-xl: 18px;
+  --text-xl--line-height: 1.35;
+  --text-2xl: 20px;
+  --text-2xl--line-height: 1.3;
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --tracking-tight: -0.02em;
+
+  --radius-sm: calc(var(--radius, 10px) - 4px);
+  --radius-md: calc(var(--radius, 10px) - 2px);
+  --radius-lg: var(--radius, 10px);
+  --radius-xl: calc(var(--radius, 10px) + 4px);
+  --radius-full: 9999px;
+
+  --animate-spin: openslots-spin 0.8s linear infinite;
+
+  @keyframes openslots-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+}
+
+@theme inline {
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-background: var(--background, var(--openslots-default-background));
+  --color-foreground: var(--foreground, var(--openslots-default-foreground));
+  --color-card: var(--card, var(--openslots-default-card));
+  --color-muted: var(--muted, var(--openslots-default-muted));
+  --color-muted-foreground: var(
+    --muted-foreground,
+    var(--openslots-default-muted-foreground)
+  );
+  --color-border: var(--border, var(--openslots-default-border));
+  --color-input: var(--input, var(--openslots-default-input));
+  --color-ring: var(--ring, var(--openslots-default-ring));
+  --color-primary: var(--primary, var(--openslots-default-primary));
+  --color-primary-foreground: var(
+    --primary-foreground,
+    var(--openslots-default-primary-foreground)
+  );
+  --color-primary-soft: var(
+    --primary-soft,
+    var(--openslots-default-primary-soft)
+  );
+  --color-accent: var(--accent, var(--openslots-default-accent));
+  --color-accent-foreground: var(
+    --accent-foreground,
+    var(--openslots-default-accent-foreground)
+  );
+  --color-accent-soft: var(--accent-soft, var(--openslots-default-accent-soft));
+  --color-highlight: var(--highlight, var(--openslots-default-highlight));
+  --color-highlight-foreground: var(
+    --highlight-foreground,
+    var(--openslots-default-highlight-foreground)
+  );
+  --color-destructive: var(--destructive, var(--openslots-default-destructive));
+  --color-svc-blue: var(--svc-blue, var(--openslots-default-svc-blue));
+  --color-svc-orange: var(--svc-orange, var(--openslots-default-svc-orange));
+  --color-svc-sky: var(--svc-sky, var(--openslots-default-svc-sky));
+  --color-svc-vermillion: var(
+    --svc-vermillion,
+    var(--openslots-default-svc-vermillion)
+  );
+  --color-svc-pink: var(--svc-pink, var(--openslots-default-svc-pink));
+  --color-svc-yellow: var(--svc-yellow, var(--openslots-default-svc-yellow));
+}
+
+/* ------------------------------------------------------------ Voltage */
+
+/* Light: the default. */
+.openslots {
+  --openslots-default-background: #fbfaff;
+  --openslots-default-foreground: #14102b;
+  --openslots-default-card: #ffffff;
+  --openslots-default-muted: #f1eefc;
+  --openslots-default-muted-foreground: #5a5578;
+  --openslots-default-border: #e1dbf7;
+  --openslots-default-input: #cfc7f0;
+  --openslots-default-primary: #5b34f5;
+  --openslots-default-primary-foreground: #ffffff;
+  --openslots-default-primary-soft: #e9e3ff;
+  --openslots-default-accent: #ff6a13;
+  --openslots-default-accent-foreground: #1f0e00;
+  --openslots-default-accent-soft: #ffe7d6;
+  --openslots-default-highlight: #ffc21a;
+  --openslots-default-highlight-foreground: #241a00;
+  --openslots-default-destructive: #b93a00;
+  --openslots-default-ring: #5b34f5;
+  /* Service colors: the Okabe-Ito set, the same in both modes. */
+  --openslots-default-svc-blue: #0072b2;
+  --openslots-default-svc-orange: #e69f00;
+  --openslots-default-svc-sky: #56b4e9;
+  --openslots-default-svc-vermillion: #d55e00;
+  --openslots-default-svc-pink: #cc79a7;
+  --openslots-default-svc-yellow: #f0e442;
+  color-scheme: light;
+}
+
+/*
+ * Dark: under a `.dark` ancestor (next-themes and shadcn's convention) unless
+ * `theme="light"` is forced, with `theme="dark"`, or with `theme="system"`
+ * when the operating system prefers dark.
+ */
+.dark .openslots:not([data-os-theme='light']),
+.openslots[data-os-theme='dark'] {
+  --openslots-default-background: #0c0a1a;
+  --openslots-default-foreground: #f3f0ff;
+  --openslots-default-card: #141127;
+  --openslots-default-muted: #1d1936;
+  --openslots-default-muted-foreground: #a9a4c8;
+  --openslots-default-border: #2c2650;
+  --openslots-default-input: #3a3366;
+  --openslots-default-primary: #8b70ff;
+  --openslots-default-primary-foreground: #0c0a1a;
+  --openslots-default-primary-soft: #251d52;
+  --openslots-default-accent: #ff7f33;
+  --openslots-default-accent-foreground: #1f0e00;
+  --openslots-default-accent-soft: #3d1f0c;
+  --openslots-default-highlight: #ffc21a;
+  --openslots-default-highlight-foreground: #241a00;
+  --openslots-default-destructive: #ff8a4d;
+  --openslots-default-ring: #8b70ff;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  .openslots[data-os-theme='system'] {
+    --openslots-default-background: #0c0a1a;
+    --openslots-default-foreground: #f3f0ff;
+    --openslots-default-card: #141127;
+    --openslots-default-muted: #1d1936;
+    --openslots-default-muted-foreground: #a9a4c8;
+    --openslots-default-border: #2c2650;
+    --openslots-default-input: #3a3366;
+    --openslots-default-primary: #8b70ff;
+    --openslots-default-primary-foreground: #0c0a1a;
+    --openslots-default-primary-soft: #251d52;
+    --openslots-default-accent: #ff7f33;
+    --openslots-default-accent-foreground: #1f0e00;
+    --openslots-default-accent-soft: #3d1f0c;
+    --openslots-default-highlight: #ffc21a;
+    --openslots-default-highlight-foreground: #241a00;
+    --openslots-default-destructive: #ff8a4d;
+    --openslots-default-ring: #8b70ff;
+    color-scheme: dark;
+  }
+}
+
+/* --------------------------------------------------------------- root */
+
+.openslots {
+  container-type: inline-size;
+  display: block;
+  box-sizing: border-box;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  color: var(--color-foreground);
+  font-family: var(--os-font-sans);
+  font-size: 14px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.5;
+  letter-spacing: normal;
+  text-align: left;
+  text-transform: none;
+  text-indent: 0;
+  white-space: normal;
+  word-spacing: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/*
+ * A scoped reset. Specificity (0,1,0) or (0,1,1) beats a host's element and
+ * universal selectors (`button { all: unset }`, `* { box-sizing:
+ * content-box }`), and the scoped utilities at (0,2,0) beat the reset.
+ */
+.openslots *,
+.openslots ::before,
+.openslots ::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: 0 solid;
+  border-color: var(--color-border);
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-decoration: none;
+  text-shadow: none;
+  float: none;
+  min-width: 0;
+}
+
+.openslots :where(div, p, h1, h2, h3, h4, h5, h6, ul, ol, li, form, fieldset) {
+  display: block;
+  list-style: none;
+  background: none;
+  position: static;
+}
+
+.openslots :where(span, strong, em, label, a, time, abbr) {
+  display: inline;
+  background: none;
+}
+
+.openslots :where(svg) {
+  display: block;
+  flex: none;
+  vertical-align: middle;
+  overflow: visible;
+}
+
+.openslots :where(button, input, select, textarea) {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  background: transparent;
+  border-radius: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+  box-shadow: none;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  max-width: 100%;
+  opacity: 1;
+  position: static;
+  text-transform: none;
+}
+
+.openslots :where(button) {
+  display: inline-block;
+  cursor: pointer;
+  text-align: center;
+  line-height: inherit;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.openslots :where(button:disabled, [aria-disabled='true']) {
+  cursor: not-allowed;
+}
+
+.openslots :where(input, select, textarea) {
+  display: block;
+  cursor: text;
+}
+
+.openslots :where(select) {
+  cursor: pointer;
+}
+
+.openslots :where(textarea) {
+  resize: vertical;
+}
+
+.openslots :where(input, textarea)::placeholder {
+  color: var(--color-muted-foreground);
+  opacity: 0.6;
+}
+
+.openslots :where(a) {
+  cursor: pointer;
+}
+
+/* T-6: one visible 2px focus ring in --ring on every interactive element. */
+.openslots
+  :where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}

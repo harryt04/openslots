@@ -3,9 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "pnpm --filter @openslots/react build:css && next dev",
     "dev:fake": "tsx scripts/dev-fake.ts",
-    "build": "next build",
+    "build": "pnpm --filter @openslots/react build:css && next build",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "next typegen && tsc --noEmit",

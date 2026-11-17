@@ -18,14 +18,17 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./styles.css": "./dist/styles.css",
+    "./testing": "./src/testing/index.tsx"
   },
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsup && node scripts/build-css.mjs",
+    "build:css": "node scripts/build-css.mjs",
+    "dev": "node scripts/build-css.mjs --watch",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "pnpm run build && vitest run"
   },
   "peerDependencies": {
     "react": "^18 || ^19",
@@ -36,11 +39,20 @@
   },
   "devDependencies": {
     "@eslint/js": "^9",
+    "@tailwindcss/postcss": "^4.3.5",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.12",
+    "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "eslint": "^9",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "jsdom": "^31.0.1",
+    "postcss": "^8.5.33",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.5",
     "tsup": "^9.0.0",
     "typescript": "^5",
     "typescript-eslint": "^8.72.2",
@@ -54,7 +66,8 @@
       ".": {
         "types": "./dist/index.d.ts",
         "import": "./dist/index.js"
-      }
+      },
+      "./styles.css": "./dist/styles.css"
     }
   }
 }

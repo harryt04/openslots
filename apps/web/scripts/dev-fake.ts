@@ -27,6 +27,13 @@ async function main() {
   await createMongoDbIndexes(mongoDBConfig.dbName)
   await closeMongoClient()
 
+  // The app imports @openslots/react/styles.css, which is compiled from the
+  // package's source. Build it once before Next starts, then keep it fresh.
+  await run('pnpm', ['--filter', '@openslots/react', 'build:css'])
+  const css = spawn('pnpm', ['--filter', '@openslots/react', 'dev'], {
+    stdio: 'inherit',
+  })
+
   console.log(`[dev:fake] in-memory MongoDB at ${mongo.getUri()}`)
   console.log(
     `[dev:fake] app at ${origin}, test sign-in at ${origin}/dev/sign-in`,
@@ -50,6 +57,7 @@ async function main() {
   async function stop(code: number) {
     if (stopping) return
     stopping = true
+    css.kill('SIGTERM')
     next.kill('SIGTERM')
     await mongo.stop()
     process.exit(code)
@@ -58,6 +66,18 @@ async function main() {
   next.on('exit', (code) => void stop(code ?? 0))
   process.on('SIGINT', () => void stop(0))
   process.on('SIGTERM', () => void stop(0))
+}
+
+function run(command: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: 'inherit' })
+    child.on('error', reject)
+    child.on('exit', (code) =>
+      code === 0
+        ? resolve()
+        : reject(new Error(`${command} ${args.join(' ')} exited with ${code}`)),
+    )
+  })
 }
 
 main().catch((error) => {

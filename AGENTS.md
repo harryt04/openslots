@@ -18,7 +18,7 @@ If the code and these documents disagree, say so and fix whichever is wrong in t
 - **The slot engine is pure** and lives in `packages/core`. Nothing else computes availability.
 - **One booking UI.** The hosted pages use `@openslots/react` from the workspace.
 - **Add shadcn components with the CLI** (`pnpm dlx shadcn@latest add <name>`); do not hand-edit `components/ui`.
-- **Colors come from tokens.** No raw hex in components except the isolated Google brand mark SVG; `apps/web/app/globals.css` is the only file that holds color values. Any state shown with color also needs an icon, label or text decoration; never rely on red versus green. The maintainer is colorblind.
+- **Colors come from tokens.** No raw hex in components except the isolated Google brand mark SVG; `apps/web/app/globals.css` is the only file in the app that holds color values, and `packages/react/src/styles.css` the only one in the booking package. Any state shown with color also needs an icon, label or text decoration; never rely on red versus green. The maintainer is colorblind.
 - **Next.js 16 uses `proxy.ts`**, exporting `proxy`, not `middleware.ts`.
 - **Secrets stay out of the repository.** Document new variables in `.env.example` and TRD section 10.
 - **Every admin query is scoped** to a business owned by the session's user.
@@ -38,7 +38,7 @@ Run from the repository root. Node 26 (`.nvmrc`) and pnpm 11 (pinned in `package
 | --- | --- |
 | `pnpm install` | Install the workspace. |
 | `pnpm run dev` | Next.js dev server for `apps/web`. Needs `apps/web/.env.local` (see `.env.example`) and a MongoDB. |
-| `pnpm run dev:fake` | The app with no outside services: in-memory MongoDB, fake calendar provider, test sign-in at `/dev/sign-in`. Set `PORT` to avoid clashing with another worktree. Data is lost on exit. |
+| `pnpm run dev:fake` | The app with no outside services: in-memory MongoDB, fake calendar provider, test sign-in at `/dev/sign-in`. Also rebuilds `@openslots/react`'s stylesheet as its source changes. Set `PORT` to avoid clashing with another worktree. Data is lost on exit. |
 | `pnpm run lint` | ESLint in every package. |
 | `pnpm run typecheck` | `tsc --noEmit` in every package (with Next route types for the app). |
 | `pnpm run test` | Vitest, unit and integration, in every package. |
@@ -48,7 +48,7 @@ Run from the repository root. Node 26 (`.nvmrc`) and pnpm 11 (pinned in `package
 | `pnpm run create-indexes` | Create MongoDB indexes for the database selected by `NODE_ENV`. Reads `apps/web/.env.local` if present. |
 | `pnpm run prettify` / `pnpm run format:check` | Prettier, write or check. CI checks. |
 
-Run one package with `pnpm --filter @openslots/core test` (or `@openslots/react`, `@openslots/web`).
+Run one package with `pnpm --filter @openslots/core test` (or `@openslots/react`, `@openslots/web`). `@openslots/react` also has `build:css` (compile `dist/styles.css` once) and `dev` (rebuild it on change); its `test` builds the package first, because some tests check `dist`.
 
 ## Things that are easy to get wrong
 
@@ -56,7 +56,8 @@ Run one package with `pnpm --filter @openslots/core test` (or `@openslots/react`
 - **Statuses go through `StatusBadge`** (`apps/web/components/custom/status-badge.tsx`), which pairs every state with an icon or strike-through. Add a new state there, not as an ad hoc colored badge.
 - **Admin code gets its business from `requireBusiness()`** (`apps/web/lib/businesses/current.ts`). It returns `{ session, business, businesses }`: the current business, always owned by the session's user, or redirects to `/onboarding`. Call it in every admin page, server action and route handler; never read `businesses` by id yourself. The two exceptions are creating a business and switching to one, which run before a current business applies: they use `requireSession()` and the owner-scoped repository functions. Below it, `lib/businesses/repository.ts` has only owner-scoped functions (each takes the user id), so a new admin query for a business's data takes `business._id` from `requireBusiness()`. The `openslots_business` cookie is only a hint and is re-validated on every call.
 - **Signed-in code calls `requireSession()`** from `apps/web/lib/session.ts`. The `(dashboard)` layout guards too, but a layout does not stop its page from rendering.
-- **Development-only routes live under `apps/web/app/dev/`** and return 404 in production. `/dev/calendar` seeds and inspects fake account calendar state. `/dev/tokens` shows every token and base primitive in light and dark.
+- **Development-only routes live under `apps/web/app/dev/`** and return 404 in production. `/dev/calendar` seeds and inspects fake account calendar state. `/dev/tokens` shows every token and base primitive in light and dark. `/dev/gallery` shows every `@openslots/react` export against a mock API, in each state, embedded in a hostile host page, resizable and at phone width.
+- **`@openslots/react` styles are compiled, not part of the app's Tailwind.** Components use `os:`-prefixed classes that only `packages/react/scripts/build-css.mjs` compiles, into `packages/react/dist/styles.css` scoped under `.openslots`. The app imports it as `@openslots/react/styles.css`; `dev`, `dev:fake` and `build` build it first (with plain `pnpm run dev`, run `pnpm --filter @openslots/react dev` beside it to pick up style changes). A host's tokens win over the package's Voltage defaults, and in the package `--accent` is the tangerine, not the app's `bg-accent` remapping. Never style the package from the app, and do not add unprefixed Tailwind classes inside `packages/react`.
 - **Workspace packages export TypeScript source** to the app (`exports` in their `package.json`); `publishConfig` points npm at `dist`. The app does not need the packages built first.
 - **The shadcn CLI may write a wrong `cn` import** (`from "cn"`) into new components in this workspace. Correct it to `@/lib/utils`; that is the one hand-edit allowed in `components/ui`.
 - **For browser checks use `agent-browser`** with a session named for your worktree, against `pnpm run dev:fake`.
