@@ -81,8 +81,16 @@ test('create, list, pause and edit a service with a live preview', async ({
   await expect(servicesNav).toContainText('1')
 
   // Pause without deleting: shown by a label, not by color.
+  // The badge appears at once, before the server has saved the change, so
+  // wait for the save itself before reloading to check that it stuck.
+  const saved = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === '/services',
+  )
   await card.getByRole('switch', { name: 'Bookable: Full color' }).click()
   await expect(card.locator('[data-status="paused"]')).toHaveText('Paused')
+  await saved
   await page.reload()
   await expect(card.locator('[data-status="paused"]')).toBeVisible()
   await expect(

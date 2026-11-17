@@ -9,12 +9,51 @@
  * when the process stops.
  */
 import { spawn } from 'node:child_process'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { MongoMemoryServer } from 'mongodb-memory-server'
 
+// One data directory per port, emptied at every start. When this script is
+// killed outright (Playwright does that) it cannot clean up after itself, so
+// instead of leaving a new 200 MB directory and a stray mongod behind each
+// time, the next start on the same port removes the previous ones.
+const dataDir = (port: string) => join(tmpdir(), `openslots-dev-fake-${port}`)
+const pidFile = (port: string) => `${dataDir(port)}.pid`
+
+function freshDataDir(port: string): string {
+  const dir = dataDir(port)
+  if (existsSync(pidFile(port))) {
+    const pid = Number(readFileSync(pidFile(port), 'utf8'))
+    try {
+      // Only a mongod that is really serving this directory is stopped.
+      const command = readFileSync(`/proc/${pid}/cmdline`, 'utf8')
+      if (pid > 0 && command.includes(dir)) process.kill(pid, 'SIGKILL')
+    } catch {
+      // Not running, or not Linux: nothing to stop.
+    }
+  }
+  rmSync(dir, { recursive: true, force: true })
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+
 async function main() {
   const port = process.env.PORT ?? '3000'
-  const mongo = await MongoMemoryServer.create()
+  const mongo = await MongoMemoryServer.create({
+    instance: { dbPath: freshDataDir(port) },
+  })
+  writeFileSync(
+    pidFile(port),
+    String(mongo.instanceInfo?.instance.mongodProcess?.pid ?? ''),
+  )
   const origin = `http://localhost:${port}`
 
   // Create the indexes on the fresh database before the app starts. The
