@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Interval, Schedule, ServiceRules, TimeRange } from './schemas'
-import { computeSlots, groupSlotsByDate, type ComputeSlotsInput } from './slots'
+import {
+  computeSlots,
+  groupSlotsByDate,
+  scheduleRangeFor,
+  type ComputeSlotsInput,
+} from './slots'
 
 const h = (hour: number, minute = 0) => hour * 60 + minute
 const r = (start: number, end: number): TimeRange => ({
@@ -456,5 +461,28 @@ describe('groupSlotsByDate: a customer timezone a day ahead of the business', ()
 
   it('leaves out dates with no slots', () => {
     expect(groupSlotsByDate({ '2026-12-02': [] }, 'UTC')).toEqual({})
+  })
+})
+
+describe('scheduleRangeFor: timezones more than a day apart', () => {
+  it('finds every slot on a Pago Pago date for a Kiritimati schedule', () => {
+    // Kiritimati is UTC+14 and Pago Pago UTC-11: 25 hours apart.
+    const customerRange = { from: '2026-12-02', to: '2026-12-02' }
+    const slots = computeSlots({
+      service: service({ durationMin: 60, startIntervalMin: 60 }),
+      schedule: everyDay('Pacific/Kiritimati', [r(h(0), h(2))]),
+      busy: [],
+      bookedCountByDate: {},
+      range: scheduleRangeFor(customerRange),
+      now: at('2026-01-01T00:00:00Z'),
+    })
+    expect(groupSlotsByDate(slots, 'Pacific/Pago_Pago', customerRange)).toEqual(
+      {
+        '2026-12-02': [
+          iso('2026-12-02T11:00:00Z'),
+          iso('2026-12-03T10:00:00Z'),
+        ],
+      },
+    )
   })
 })

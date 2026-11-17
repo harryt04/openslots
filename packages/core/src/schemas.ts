@@ -210,12 +210,24 @@ export type ServiceInput = z.infer<typeof serviceSchema>
 
 // ------------------------------------------------------------------ customer
 
+/**
+ * An optional free-text field. An untouched form input sends an empty string,
+ * so blank and whitespace-only values mean "not given" rather than an error.
+ */
+function optionalText(max: number) {
+  return z.preprocess(
+    (value) =>
+      typeof value === 'string' && value.trim() === '' ? undefined : value,
+    z.string().trim().max(max).optional(),
+  )
+}
+
 /** Customer fields as entered in the booking form. */
 export const customerFieldsSchema = z.object({
   name: z.string().trim().min(1).max(LIMITS.customerName),
   email: z.email().max(LIMITS.customerEmail),
-  phone: z.string().trim().min(1).max(LIMITS.customerPhone).optional(),
-  notes: z.string().trim().min(1).max(LIMITS.customerNotes).optional(),
+  phone: optionalText(LIMITS.customerPhone),
+  notes: optionalText(LIMITS.customerNotes),
 })
 export type CustomerFields = z.infer<typeof customerFieldsSchema>
 

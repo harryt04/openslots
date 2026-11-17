@@ -246,3 +246,38 @@ describe('public API v1 payloads', () => {
     ).toBe(false)
   })
 })
+
+describe('review regressions', () => {
+  it('reports invalid slot dates as validation errors instead of throwing', async () => {
+    const { slotsQuerySchema } = await import('./api')
+    const service = '0123456789abcdef01234567'
+    for (const bad of ['2026-02-29', 'garbage', '2026-13-01']) {
+      expect(
+        slotsQuerySchema.safeParse({ service, from: bad, to: '2026-12-02' })
+          .success,
+      ).toBe(false)
+      expect(
+        slotsQuerySchema.safeParse({ service, from: '2026-12-02', to: bad })
+          .success,
+      ).toBe(false)
+    }
+  })
+
+  it('treats blank optional customer fields as not given', () => {
+    const parsed = customerFieldsSchema.parse({
+      name: 'A',
+      email: 'a@example.com',
+      phone: '',
+      notes: '   ',
+    })
+    expect(parsed.phone).toBeUndefined()
+    expect(parsed.notes).toBeUndefined()
+    expect(
+      customerFieldsSchema.parse({
+        name: 'A',
+        email: 'a@example.com',
+        phone: ' 555 ',
+      }).phone,
+    ).toBe('555')
+  })
+})

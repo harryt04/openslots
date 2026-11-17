@@ -14,7 +14,7 @@ import {
   slugSchema,
   timeZoneSchema,
 } from './schemas'
-import { daysBetween } from './time'
+import { daysBetween, isLocalDate } from './time'
 
 /** The most days a single slots request may span (`to − from`). */
 export const MAX_SLOT_RANGE_DAYS = 62
@@ -104,6 +104,8 @@ export const slotsQuerySchema = z
     tz: timeZoneSchema.optional(),
   })
   .superRefine((q, ctx) => {
+    // zod still runs this when a field failed; only compare real dates.
+    if (!isLocalDate(q.from) || !isLocalDate(q.to)) return
     const span = daysBetween(q.from, q.to)
     if (span < 0) {
       ctx.addIssue({

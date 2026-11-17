@@ -106,9 +106,27 @@ export function computeSlots(input: ComputeSlotsInput): SlotsByDate {
  * Regroups slots by calendar date in `timeZone` (the customer's), as the
  * public API returns them. Only dates with at least one slot appear. Pass
  * `range` to keep only those dates, inclusive: a server asked for customer
- * dates `from`..`to` can compute schedule dates `from − 1`..`to + 1` and trim
- * here.
+ * dates `from`..`to` computes the schedule dates given by
+ * `scheduleRangeFor` and trims here.
  */
+/**
+ * The schedule-local dates to compute so that every slot falling on the
+ * customer's dates `from`..`to` is found, whatever the two timezones are.
+ *
+ * Two days either side, not one: zones can be more than 24 hours apart
+ * (Pacific/Kiritimati is UTC+14, Pacific/Pago_Pago is UTC-11), so a customer's
+ * date can reach into the schedule date two days away.
+ */
+export function scheduleRangeFor(customerRange: { from: string; to: string }): {
+  from: string
+  to: string
+} {
+  return {
+    from: addDays(customerRange.from, -2),
+    to: addDays(customerRange.to, 2),
+  }
+}
+
 export function groupSlotsByDate(
   slots: SlotsByDate,
   timeZone: string,
