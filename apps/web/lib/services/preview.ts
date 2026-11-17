@@ -22,18 +22,39 @@ const MS_PER_MINUTE = 60_000
 const SEARCH_DAYS = 366
 
 /**
- * The first date the schedule is open that lies wholly beyond the minimum
- * notice: strictly after the schedule-local date of `now + minNotice`. Null
- * when the schedule has no open day in the next year.
+ * The date the preview shows, chosen by the engine rather than by opening
+ * hours alone, so the preview never claims "nothing offered" while the API
+ * would offer slots:
+ *
+ * 1. the first date after the one the minimum notice ends on that has at
+ *    least one start (a whole day, so the picture is not cut short by notice);
+ * 2. otherwise that first date itself, if it has a start (a short window);
+ * 3. otherwise the first date with opening hours, which will show no starts;
+ * 4. null when the schedule is closed for the next year.
  */
 export function previewDate(
   schedule: Schedule,
   now: Date,
-  minNoticeMin: number,
+  rules: ServiceRules,
 ): string | null {
-  const earliest = new Date(now.getTime() + minNoticeMin * MS_PER_MINUTE)
+  const earliest = new Date(now.getTime() + rules.minNoticeMin * MS_PER_MINUTE)
   const first = localDateOf(earliest, schedule.timezone)
+  const last = addDays(first, SEARCH_DAYS)
+  const slots = computeSlots({
+    service: rules,
+    schedule,
+    busy: [],
+    bookedCountByDate: {},
+    range: { from: first, to: last },
+    now,
+  })
+  const hasStart = (date: string) => (slots[date]?.length ?? 0) > 0
   for (let i = 1; i <= SEARCH_DAYS; i++) {
+    const date = addDays(first, i)
+    if (hasStart(date)) return date
+  }
+  if (hasStart(first)) return first
+  for (let i = 0; i <= SEARCH_DAYS; i++) {
     const date = addDays(first, i)
     if (rangesForDate(schedule, date).length > 0) return date
   }
@@ -132,7 +153,7 @@ export function computePreview({
 }): Preview {
   const rules = rulesFromForm(values)
   if (!rules) return { kind: 'invalid' }
-  const date = previewDate(schedule, now, rules.minNoticeMin)
+  const date = previewDate(schedule, now, rules)
   if (!date) return { kind: 'closed' }
   const ranges = rangesForDate(schedule, date)
   const example = showExample ? exampleBusyRange(ranges) : null

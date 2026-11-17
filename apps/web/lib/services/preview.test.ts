@@ -129,13 +129,17 @@ describe('rulesFromForm', () => {
 
 describe('previewDate', () => {
   it('is the next open day wholly beyond the minimum notice', () => {
-    expect(previewDate(salon, tuesday, 0)).toBe('2026-12-02')
-    // 24 hours from Tuesday 10:00 is Wednesday 10:00, so Thursday.
-    expect(previewDate(salon, tuesday, 1440)).toBe('2026-12-03')
-    // Friday: the weekend is closed, so Monday.
-    expect(previewDate(salon, new Date('2026-12-04T17:00:00Z'), 0)).toBe(
-      '2026-12-07',
+    expect(previewDate(salon, tuesday, { ...fullColor, minNoticeMin: 0 })).toBe(
+      '2026-12-02',
     )
+    // 24 hours from Tuesday 10:00 is Wednesday 10:00, so Thursday.
+    expect(
+      previewDate(salon, tuesday, { ...fullColor, minNoticeMin: 1440 }),
+    ).toBe('2026-12-03')
+    // Friday: the weekend is closed, so Monday.
+    expect(
+      previewDate(salon, new Date('2026-12-04T17:00:00Z'), fullColor),
+    ).toBe('2026-12-07')
   })
 
   it('honours overrides and returns null when nothing is open', () => {
@@ -143,9 +147,9 @@ describe('previewDate', () => {
       ...salon,
       overrides: [{ date: '2026-12-02', ranges: [] }],
     }
-    expect(previewDate(closedWednesday, tuesday, 0)).toBe('2026-12-03')
+    expect(previewDate(closedWednesday, tuesday, fullColor)).toBe('2026-12-03')
     const never: Schedule = { ...salon, weekly: [[], [], [], [], [], [], []] }
-    expect(previewDate(never, tuesday, 0)).toBeNull()
+    expect(previewDate(never, tuesday, fullColor)).toBeNull()
     expect(
       computePreview({
         values: fullColor,
@@ -180,7 +184,9 @@ describe('exampleBusyRange', () => {
 })
 
 describe('computePreview and the booking window', () => {
-  it('flags a preview day beyond the window, where the engine offers nothing', () => {
+  it('shows the day the engine still offers when the window is short', () => {
+    // 24 hour notice from Tuesday 10:00 ends Wednesday 10:00; a one day
+    // window ends Wednesday. The engine offers Wednesday 10:00 to 15:00.
     const preview = computePreview({
       values: { ...fullColor, windowDays: 1, minNoticeMin: 1440 },
       schedule: salon,
@@ -188,8 +194,33 @@ describe('computePreview and the booking window', () => {
       showExample: false,
     })
     if (preview.kind !== 'day') throw new Error(preview.kind)
+    expect(preview.date).toBe('2026-12-02')
+    expect(preview.beyondWindow).toBe(false)
+    expect(localStarts(preview.starts)).toEqual([
+      '10:00 AM',
+      '11:00 AM',
+      '12:00 PM',
+      '1:00 PM',
+      '2:00 PM',
+      '3:00 PM',
+    ])
+  })
+
+  it('skips an open day too short for the service', () => {
+    const shortThenLong = {
+      ...salon,
+      overrides: [
+        { date: '2026-12-02', ranges: [{ startMin: h(9), endMin: h(11) }] },
+      ],
+    }
+    const preview = computePreview({
+      values: fullColor,
+      schedule: shortThenLong,
+      now: tuesday,
+      showExample: false,
+    })
+    if (preview.kind !== 'day') throw new Error(preview.kind)
     expect(preview.date).toBe('2026-12-03')
-    expect(preview.beyondWindow).toBe(true)
-    expect(preview.starts).toEqual([])
+    expect(preview.starts.length).toBeGreaterThan(0)
   })
 })
