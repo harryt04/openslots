@@ -1,3 +1,4 @@
+import { listLinks } from '@/lib/calendar-links/repository'
 import { AppSidebar } from '@/components/custom/app-sidebar'
 import {
   SidebarInset,
@@ -27,6 +28,13 @@ export default async function DashboardLayout({
             id: b._id.toHexString(),
             name: b.name,
           }))}
+          navMeta={{
+            Calendars: {
+              attention: (await listLinks(business._id)).some(
+                (l) => l.status === 'needs_reconnect',
+              ),
+            },
+          }}
           currentId={business._id.toHexString()}
           user={{ name: session.user.name, email: session.user.email }}
           navMeta={{ Services: { count: serviceCount } }}

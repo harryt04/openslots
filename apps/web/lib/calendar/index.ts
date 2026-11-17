@@ -1,4 +1,5 @@
 import 'server-only'
+import { ObjectId } from 'mongodb'
 import { APIError } from 'better-auth/api'
 import { createHash } from 'node:crypto'
 import { auth } from '../auth'
@@ -20,7 +21,45 @@ export function calendarProvider(account: {
   id: string
   userId: string
 }): CalendarProvider {
-  if (isFakeGoogle()) return new FakeCalendarProvider(account.id)
+  if (isFakeGoogle()) {
+    const fake = new FakeCalendarProvider(account.id)
+    const owned = async () => {
+      if (!ObjectId.isValid(account.id)) throw new CalendarAuthError()
+      const { getDb } = await import('../mongo-client')
+      const found = await (await getDb()).collection('account').findOne({
+        _id: new ObjectId(account.id),
+        providerId: 'google',
+        userId: {
+          $in: ObjectId.isValid(account.userId)
+            ? [account.userId, new ObjectId(account.userId)]
+            : [account.userId],
+        },
+      })
+      if (!found) throw new CalendarAuthError()
+    }
+    return {
+      async listCalendars() {
+        await owned()
+        return fake.listCalendars()
+      },
+      async freeBusy(...args) {
+        await owned()
+        return fake.freeBusy(...args)
+      },
+      async createEvent(...args) {
+        await owned()
+        return fake.createEvent(...args)
+      },
+      async updateEvent(...args) {
+        await owned()
+        return fake.updateEvent(...args)
+      },
+      async deleteEvent(...args) {
+        await owned()
+        return fake.deleteEvent(...args)
+      },
+    }
+  }
   return new GoogleCalendarProvider(async () => {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {

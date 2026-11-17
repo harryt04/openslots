@@ -1,3 +1,5 @@
+import { vi } from 'vitest'
+vi.mock('server-only', () => ({}))
 import { expect, it } from 'vitest'
 import { MongoMemoryServer } from 'mongodb-memory-server'
 it('fake sign-in provisions a real Google account record', async () => {
@@ -23,6 +25,21 @@ it('fake sign-in provisions a real Google account record', async () => {
       providerId: 'google',
     })
     expect(google?.id).not.toBe(result.user.id)
+    const { calendarProvider, CalendarAuthError } = await import('./calendar')
+    if (!google) throw new Error('Expected fake Google account')
+    expect(
+      await calendarProvider({
+        id: google.id,
+        userId: result.user.id,
+      }).listCalendars(),
+    ).toHaveLength(3)
+    await expect(
+      calendarProvider({
+        id: google.id,
+        userId: 'someone-else',
+      }).listCalendars(),
+    ).rejects.toBeInstanceOf(CalendarAuthError)
+    await (await import('./mongo-client')).closeMongoClient()
   } finally {
     await mongo.stop()
   }

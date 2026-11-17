@@ -28,6 +28,10 @@ export const indexes: Record<CollectionName, IndexDescription[]> = {
     },
   ],
   schedules: [{ key: { businessId: 1 }, name: 'businessId' }],
+  calendar_link_returns: [
+    { key: { nonce: 1 }, unique: true, name: 'nonce_unique' },
+    { key: { expiresAt: 1 }, expireAfterSeconds: 0, name: 'expiresAt_ttl' },
+  ],
   calendar_links: [
     {
       key: { businessId: 1, accountId: 1 },
