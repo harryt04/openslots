@@ -117,6 +117,17 @@ Overlapping reschedules fail closed for v1: free/busy has no event identity and 
 
 Because all service durations and intervals are multiples of 5 minutes, block alignment is exact. A required test fires at least 20 concurrent requests for overlapping times and asserts exactly one `201`.
 
+### Proposed revision-fenced replacement: unresolved safety issues
+
+The replacement state machine requested after the second review is **not yet implemented**. The implementation above remains vulnerable to the reviewed stale-operation races and must not be treated as safe for production booking. Moving booking writes to revision compare-and-set alone does not resolve the following issues:
+
+- The proposed cap calculation counts every pending/confirmed booking without a cap lock as legacy usage. A newly inserted pending attempt itself meets that predicate. With a cap of one, even the first attempt gets zero positions; simultaneous pending attempts can also consume all the apparent legacy allowance. The calculation must distinguish pre-cap bookings from operations still acquiring their place, including excluding the attempting booking.
+- A successful move keeps `prevOpId` until event reconciliation finishes. Allowing another move before that finishes overwrites the only reference to the first interval's locks. Safest behavior is to refuse further moves while `eventSync` is set.
+- Same-date moves retain a cap lock owned by the old operation, but successful reconciliation deletes that operation's locks. The cap place needs explicit durable ownership across moves, or a new reservation before each move (which conservatively refuses some moves on full days).
+- Revision checks fence MongoDB writes, not an already issued Google request. A create paused before its Google write can resume after an expired attempt was reconciled and deleted, leaving an event with no booking document for a future sweep to find. A patch paused before its Google write can likewise finish after cancellation reconciliation. The fake provider currently implements patch as an upsert, making this latter resurrection directly reproducible. Recovery needs durable intent/tombstones through the external-operation uncertainty window, plus provider semantics that do not resurrect deleted events. Client request timeouts alone do not prove the server did not apply a write later.
+
+The replacement must specify these cases before section 5 can truthfully describe it as implemented. Required crash, stalled-operation, randomized invariant and reachable-state tests for that replacement remain outstanding.
+
 ## 6. Google integration
 
 - **Sign-in and consent.** Better Auth Google provider uses `accessType: 'offline'`, `prompt: 'consent'` and `scope`. Confirmed against [Better Auth Google documentation](https://www.better-auth.com/docs/authentication/google).
@@ -158,6 +169,8 @@ The request and response shapes below are zod schemas in `@openslots/core` (`pac
 | `POST /manage/:token/cancel` | Cancel | |
 | `POST /manage/:token/reschedule` | Move to `{ start }` | Same rules as create |
 
+Rate limiting checks and increments the IP bucket first and stops immediately when it is exceeded; only an accepted IP attempt increments the shared key bucket. With zero trusted proxy hops there is no per-IP limit: the per-key bucket is the only rate-limit protection. When hops are set, the app must not be reachable except through the trusted proxy. Time bounds assume the app servers’ clocks agree.
+
 Protection: zod validation and length limits on every field; rate limits per key and IP (suggested: 60 slot reads and 10 booking attempts per minute), stored in MongoDB with a TTL index so it works on one or many instances; a hidden honeypot field in the form; no customer data is ever returned by list endpoints.
 
 Admin actions (S2 to S7) use Next.js server actions or route handlers behind the session, and every query is filtered by a business the session's user owns. A test must prove one user cannot read or change another user's business.
@@ -192,7 +205,7 @@ Admin actions (S2 to S7) use Next.js server actions or route handlers behind the
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | yes | Sign-in and calendar access |
 | `OPENSLOTS_ALLOWED_EMAILS` | no | Sign-in allowlist |
 | `NEXT_PUBLIC_POSTHOG_KEY`, `NEXT_PUBLIC_POSTHOG_HOST` | no | Analytics |
-| `TRUSTED_PROXY_HOPS` | no | Default `0` skips IP buckets. Count trusted hops from the right of X-Forwarded-For; use `1` behind one nginx/Coolify proxy that appends the client address. |
+| `TRUSTED_PROXY_HOPS` | no | Default `0` means no per-IP limit; the per-key bucket is the only rate-limit protection. When set, the app must be reachable only through the proxy. App server clocks must agree. Count trusted hops from the right of X-Forwarded-For; use `1` behind one nginx/Coolify proxy that appends the client address. |
 | `API_SLOTS_IP_LIMIT`, `API_WRITE_IP_LIMIT` | no | Per-minute IP limits, defaults 60 and 10. Positive integers. |
 | `API_SLOTS_KEY_LIMIT`, `API_WRITE_KEY_LIMIT` | no | Separate per-minute key limits, defaults 600 and 100. Positive integers. |
 | `E2E_FAKE_GOOGLE` | no | Tests and local UI work only: use the in-memory calendar provider and enable the test sign-in at `/dev/sign-in` (the only time email and password sign-in exists). Must refuse to enable when `NODE_ENV=production`. `pnpm run dev:fake` sets it and starts an in-memory MongoDB |

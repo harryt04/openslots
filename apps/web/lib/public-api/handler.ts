@@ -92,7 +92,7 @@ export async function handle(
         ],
       ]
       if (ip)
-        scopes.push([
+        scopes.unshift([
           `ip:${ip.slice(0, 100)}`,
           configuredLimit(
             write ? 'API_WRITE_IP_LIMIT' : 'API_SLOTS_IP_LIMIT',

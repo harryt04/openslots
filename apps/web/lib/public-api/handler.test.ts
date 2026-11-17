@@ -815,3 +815,19 @@ it('sweep reconciles a crash after event creation before releasing locks', async
   expect(await db.collection('bookings').countDocuments()).toBe(0)
   expect(await db.collection('slot_locks').countDocuments()).toBe(0)
 })
+
+it('an exhausted IP cannot consume the shared key allowance', async () => {
+  // Use the production defaults: 10 writes per IP and 100 per key.
+  const headers = { 'x-forwarded-for': '198.51.100.90' }
+  for (let i = 0; i < 110; i++) {
+    const response = await call('bookings', {}, undefined, headers)
+    expect(response.status).toBe(i < 10 ? 400 : 429)
+  }
+  expect(
+    (
+      await call('bookings', input(), undefined, {
+        'x-forwarded-for': '198.51.100.91',
+      })
+    ).status,
+  ).toBe(201)
+})
