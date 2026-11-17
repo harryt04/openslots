@@ -183,6 +183,7 @@ Admin actions (S2 to S7) use Next.js server actions or route handlers behind the
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | yes | Sign-in and calendar access |
 | `OPENSLOTS_ALLOWED_EMAILS` | no | Sign-in allowlist |
 | `NEXT_PUBLIC_POSTHOG_KEY`, `NEXT_PUBLIC_POSTHOG_HOST` | no | Analytics |
+| `TRUST_PROXY_IP` | no | Default `0`. Set `1` only behind a trusted proxy that replaces X-Forwarded-For; enables per-client IP rate buckets. |
 | `E2E_FAKE_GOOGLE` | no | Tests and local UI work only: use the in-memory calendar provider and enable the test sign-in at `/dev/sign-in` (the only time email and password sign-in exists). Must refuse to enable when `NODE_ENV=production`. `pnpm run dev:fake` sets it and starts an in-memory MongoDB |
 
 ## 11. Testing and CI
@@ -202,3 +203,39 @@ Admin actions (S2 to S7) use Next.js server actions or route handlers behind the
 ## 13. Open technical questions
 
 None block the build. Section 6 documentation checks were settled in slice 1B; live Google consent and refresh still require the maintainer validation in docs/google-validation.md.
+
+### Slice 3A API decisions and remaining limitation
+
+Requests without Origin are accepted with a valid publishable key, with no
+Access-Control-Allow-Origin header. This supports server clients and same-origin
+GETs; keys are public, so origins are a browser policy, not authentication.
+Preflight cannot send a key: OPTIONS accepts the instance origin or an origin
+registered on any business. The actual request checks that key's own business.
+Responses vary by Origin; business responses also vary by X-OpenSlots-Key and
+are private-cacheable for 60 seconds. Free/busy is currently uncached.
+
+Rate counters use MongoDB atomic increments and a TTL index, separately per key
+and IP: 60 slot reads and 30 POST attempts per minute. Section 10 environment
+addition: `TRUST_PROXY_IP=1` trusts the first X-Forwarded-For value **only** behind
+an operator-controlled proxy that replaces that header. Default `0` ignores all
+forwarded headers; all remote clients share an unknown-IP bucket (conservative,
+but potentially restrictive). No key, token, or customer value is logged.
+
+Cancel permits paused/deleted services, but only future confirmed bookings.
+Reschedule requires a future confirmed booking and an active extant service;
+missing schedules offer no slots. Both serialize changes to one booking with an
+atomic `changing` claim. The original service duration/buffers snapshot is used
+for the moved booking. Booking destination is snapshotted to ensure subsequent
+calendar setting changes cannot redirect updates/deletes. Only the manage token
+hash is persisted; the manage URL is sent to Google in the event description.
+An admin reschedule without a token cannot reconstruct that URL.
+
+**Unresolved contract issue:** freeBusy returns intervals without event identity.
+When the booking calendar also blocks, its own Google event prevents a move
+that overlaps the old time, despite excluding the booking from MongoDB busy
+intervals. Subtracting that interval would hide other overlapping Google events.
+A safe implementation needs a provider operation that can exclude one event
+while preserving all other busy intervals (and a corresponding privacy decision
+in section 6). The current implementation fails closed in that case; the shared
+core API contract remains unchanged. The 30-attempt write limit allows the required 20-request race to exercise the
+actual route handlers, including normal rate limiting, without bypassing it.

@@ -33,6 +33,7 @@ export const mongoDBConfig = {
     calendarLinkReturns: 'calendar_link_returns',
     bookings: 'bookings',
     slotLocks: 'slot_locks',
+    apiRateLimits: 'api_rate_limits',
   },
 } as const
 

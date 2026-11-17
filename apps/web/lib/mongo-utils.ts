@@ -51,6 +51,9 @@ export const indexes: Record<CollectionName, IndexDescription[]> = {
       name: 'businessId_status_start',
     },
   ],
+  api_rate_limits: [
+    { key: { expiresAt: 1 }, expireAfterSeconds: 0, name: 'expiresAt_ttl' },
+  ],
   slot_locks: [
     // Booking correctness depends on this index (TRD section 5).
     {

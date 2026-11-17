@@ -75,3 +75,12 @@ The email/password route at /dev/sign-in remains fake-only and is absent in prod
 ## Calendar links contract
 
 Slice 3A uses `calendarAvailability(business)` from `apps/web/lib/calendar-links/repository.ts` before querying slots or writing a booking. It returns blocking calendar account/user references and the booking destination, or `calendar_unavailable`; never bypass a failed result. On provider `CalendarAuthError`, call `markNeedsReconnect(business._id, accountId)`. Other errors must not change reconnect status. Calendar links persist `writable` from CalendarList permissions; event details are never read.
+
+## Public booking API
+
+Slice 3A public handlers live in `lib/public-api/handler.ts`; booking writes and
+shared admin cancel/reschedule functions live in `lib/bookings/service.ts`.
+Admin callers pass the business returned by `requireBusiness()`. Read functions
+in `lib/bookings/repository.ts` always require a business id. Never subtract a
+booking's own interval from Google free/busy: that could hide another event.
+The unresolved overlapping-reschedule provider limitation is recorded in TRD.
