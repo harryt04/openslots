@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import { getDb, mongoDBConfig } from '../mongo-client'
 import { generatePublishableKey } from './keys'
+import { defaultWeekly, type ScheduleDoc } from '../schedules/repository'
 import type { BusinessInput } from './schema'
 
 /** `businesses` document (TRD section 3). */
@@ -15,18 +16,6 @@ export type BusinessDoc = {
   bookingCalendar?: { accountId: string; calendarId: string }
   publishableKey: string
   allowedOrigins: string[]
-  createdAt: Date
-  updatedAt: Date
-}
-
-/** `schedules` document (TRD section 3). `weekly[0]` is Sunday. */
-export type ScheduleDoc = {
-  _id: ObjectId
-  businessId: ObjectId
-  name: string
-  timezone: string
-  weekly: { startMin: number; endMin: number }[][]
-  overrides: { date: string; ranges: { startMin: number; endMin: number }[] }[]
   createdAt: Date
   updatedAt: Date
 }
@@ -58,12 +47,6 @@ function isDuplicateKey(error: unknown): boolean {
     'code' in error &&
     (error as { code: unknown }).code === 11000
   )
-}
-
-/** Monday to Friday, 09:00 to 17:00. Index 0 is Sunday. */
-export function defaultWeekly(): ScheduleDoc['weekly'] {
-  const day = [{ startMin: 9 * 60, endMin: 17 * 60 }]
-  return [[], day, day, day, day, day, []].map((d) => d.map((r) => ({ ...r })))
 }
 
 async function insertScheduleDoc(schedule: ScheduleDoc): Promise<void> {

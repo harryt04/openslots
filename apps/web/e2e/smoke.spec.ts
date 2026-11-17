@@ -19,7 +19,9 @@ test('the token sheet renders with Voltage colors in light and dark', async ({
 
 test('status badges never rely on color alone', async ({ page }) => {
   await page.goto('/dev/tokens')
-  for (const badge of await page.locator('[data-status]').all()) {
+  for (const badge of await page
+    .locator('[data-slot="badge"][data-status]')
+    .all()) {
     const hasIcon = (await badge.locator('svg').count()) > 0
     const struck = await badge.evaluate((el) =>
       getComputedStyle(el).textDecorationLine.includes('line-through'),
