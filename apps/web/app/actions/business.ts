@@ -10,7 +10,7 @@ import {
 } from '@/lib/businesses/current'
 import {
   createBusiness,
-  getBusinessForUser,
+  resolveSwitchTarget,
   updateBusinessForUser,
 } from '@/lib/businesses/repository'
 import {
@@ -78,9 +78,9 @@ export async function updateBusinessAction(
 }
 
 /** Switch the current business. Only businesses the user owns are accepted. */
-export async function switchBusinessAction(businessId: string) {
+export async function switchBusinessAction(businessId: unknown) {
   const session = await requireSession()
-  const owned = await getBusinessForUser(session.user.id, String(businessId))
+  const owned = await resolveSwitchTarget(session.user.id, businessId)
   if (owned) {
     await remember(owned._id.toHexString())
   }

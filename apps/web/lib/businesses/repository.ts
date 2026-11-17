@@ -1,4 +1,5 @@
 import { ObjectId, type Collection } from 'mongodb'
+import { z } from 'zod'
 
 import { getDb, mongoDBConfig } from '../mongo-client'
 import { generatePublishableKey } from './keys'
@@ -65,9 +66,19 @@ export function defaultWeekly(): ScheduleDoc['weekly'] {
   return [[], day, day, day, day, day, []].map((d) => d.map((r) => ({ ...r })))
 }
 
+async function insertScheduleDoc(schedule: ScheduleDoc): Promise<void> {
+  await (
+    await getDb()
+  )
+    .collection<ScheduleDoc>(mongoDBConfig.collections.schedules)
+    .insertOne(schedule)
+}
+
 export async function createBusiness(
   userId: string,
   input: BusinessInput,
+  /** Replaceable in tests to prove the cleanup when this write fails. */
+  insertSchedule: (schedule: ScheduleDoc) => Promise<void> = insertScheduleDoc,
 ): Promise<
   | { ok: true; business: BusinessDoc }
   | { ok: false; error: CreateBusinessError }
@@ -93,19 +104,24 @@ export async function createBusiness(
     if (isDuplicateKey(error)) return { ok: false, error: 'slug_taken' }
     throw error
   }
-  const schedules = (await getDb()).collection<ScheduleDoc>(
-    mongoDBConfig.collections.schedules,
-  )
-  await schedules.insertOne({
-    _id: new ObjectId(),
-    businessId: business._id,
-    name: 'Working hours',
-    timezone: input.timezone,
-    weekly: defaultWeekly(),
-    overrides: [],
-    createdAt: now,
-    updatedAt: now,
-  })
+  // No transactions (TRD section 1), so compensate by hand: a business must
+  // never be left without its first schedule. If the schedule cannot be
+  // written, remove the business again so the owner can simply retry.
+  try {
+    await insertSchedule({
+      _id: new ObjectId(),
+      businessId: business._id,
+      name: 'Working hours',
+      timezone: input.timezone,
+      weekly: defaultWeekly(),
+      overrides: [],
+      createdAt: now,
+      updatedAt: now,
+    })
+  } catch (error) {
+    await col.deleteOne({ _id: business._id, ownerUserId: userId })
+    throw error
+  }
   return { ok: true, business }
 }
 
@@ -175,4 +191,20 @@ export async function resolveCurrentBusiness(
     all.find((b) => b._id.toHexString() === rememberedId) ?? all[0]
   if (!current) return null
   return { current, all }
+}
+
+const businessIdSchema = z.string().regex(/^[0-9a-f]{24}$/, 'Not a business id')
+
+/**
+ * The business a user asked to switch to, or null. The input comes straight
+ * from a server action call, so it is untrusted: anything that is not a
+ * canonical id of a business this user owns yields null.
+ */
+export async function resolveSwitchTarget(
+  userId: string,
+  rawBusinessId: unknown,
+): Promise<BusinessDoc | null> {
+  const parsed = businessIdSchema.safeParse(rawBusinessId)
+  if (!parsed.success) return null
+  return getBusinessForUser(userId, parsed.data)
 }

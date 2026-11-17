@@ -155,24 +155,98 @@ describe('businesses repository: ownership scoping', () => {
   })
 })
 
+describe('creating a business without transactions', () => {
+  it('removes the business again when its first schedule cannot be written', async () => {
+    await expect(
+      repo.createBusiness('user-a', input('half-made'), async () => {
+        throw new Error('schedule write failed')
+      }),
+    ).rejects.toThrow('schedule write failed')
+
+    expect(await repo.listBusinessesForUser('user-a')).toEqual([])
+    // The slug is free again, so the owner can retry.
+    const retry = await repo.createBusiness('user-a', input('half-made'))
+    expect(retry.ok).toBe(true)
+  })
+})
+
+describe('switching business', () => {
+  it('accepts only a canonical id of a business the user owns', async () => {
+    const mine = await repo.createBusiness('user-a', input('mine'))
+    const theirs = await repo.createBusiness('user-b', input('theirs'))
+    if (!mine.ok || !theirs.ok) throw new Error('expected ok')
+    const myId = mine.business._id.toHexString()
+    const theirId = theirs.business._id.toHexString()
+
+    expect((await repo.resolveSwitchTarget('user-a', myId))?.slug).toBe('mine')
+    expect(await repo.resolveSwitchTarget('user-a', theirId)).toBeNull()
+
+    for (const forged of [
+      [myId],
+      { toString: () => myId },
+      { $ne: null },
+      myId.toUpperCase(),
+      `${myId} `,
+      '',
+      null,
+      undefined,
+      42,
+    ]) {
+      expect(await repo.resolveSwitchTarget('user-a', forged)).toBeNull()
+    }
+  })
+})
+
+// Written out from TRD section 3 rather than read from the implementation,
+// so removing or changing an index definition fails this test.
+const TRD_INDEXES: Record<
+  string,
+  { key: Record<string, 1>; unique: boolean }[]
+> = {
+  businesses: [
+    { key: { slug: 1 }, unique: true },
+    { key: { publishableKey: 1 }, unique: true },
+    { key: { ownerUserId: 1 }, unique: false },
+  ],
+  services: [{ key: { businessId: 1, slug: 1 }, unique: true }],
+  schedules: [{ key: { businessId: 1 }, unique: false }],
+  calendar_links: [{ key: { businessId: 1, accountId: 1 }, unique: true }],
+  bookings: [
+    { key: { businessId: 1, start: 1 }, unique: false },
+    { key: { manageTokenHash: 1 }, unique: true },
+    { key: { businessId: 1, status: 1, start: 1 }, unique: false },
+  ],
+  slot_locks: [
+    { key: { businessId: 1, block: 1 }, unique: true },
+    { key: { bookingId: 1 }, unique: false },
+  ],
+}
+
 describe('create-indexes', () => {
-  it('is idempotent and defines every TRD index, including slot_locks', async () => {
+  it('is idempotent and creates exactly the indexes of TRD section 3', async () => {
     await utils.createMongoDbIndexes(client.mongoDBConfig.dbName)
     await utils.createMongoDbIndexes(client.mongoDBConfig.dbName)
     const db = await client.getDb()
 
-    for (const [name, specs] of Object.entries(utils.indexes)) {
-      const actual = await db.collection(name).indexes()
-      for (const spec of specs) {
-        const found = actual.find((i) => i.name === spec.name)
-        expect(found, `${name}.${spec.name}`).toBeDefined()
-        expect(Boolean(found?.unique)).toBe(Boolean(spec.unique))
+    for (const [name, expected] of Object.entries(TRD_INDEXES)) {
+      const actual = (await db.collection(name).indexes())
+        .filter((i) => i.name !== '_id_')
+        .map((i) => ({ key: i.key, unique: Boolean(i.unique) }))
+      // toEqual on arrays of objects ignores key order inside `key`, so
+      // compare the ordered field lists as well.
+      expect(actual, name).toHaveLength(expected.length)
+      for (const want of expected) {
+        const found = actual.find(
+          (i) =>
+            JSON.stringify(Object.entries(i.key)) ===
+            JSON.stringify(Object.entries(want.key)),
+        )
+        expect(found, `${name} ${JSON.stringify(want.key)}`).toBeDefined()
+        expect(found?.unique, `${name} ${JSON.stringify(want.key)}`).toBe(
+          want.unique,
+        )
       }
     }
-
-    const locks = await db.collection('slot_locks').indexes()
-    const unique = locks.find((i) => i.unique && i.key?.block === 1)
-    expect(unique?.key).toEqual({ businessId: 1, block: 1 })
 
     await db.collection('slot_locks').insertOne({ businessId: 'b', block: 1 })
     await expect(
