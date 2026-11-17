@@ -3,7 +3,7 @@ import { test as base, expect, type BrowserContext } from '@playwright/test'
 /** Observe real browser responses, including documents/RSC and Better Auth. */
 export const test = base.extend<{ browserPayloadAudit: void }>({
   browserPayloadAudit: [
-    async ({ browser, context }, use) => {
+    async ({ browser, context }, runFixture) => {
       const pending: Promise<void>[] = []
       const violations: string[] = []
       const observe = (target: BrowserContext) => {
@@ -47,7 +47,7 @@ export const test = base.extend<{ browserPayloadAudit: void }>({
         return target
       }
       try {
-        await use()
+        await runFixture()
       } finally {
         browser.newContext = original
         await Promise.all(pending)
