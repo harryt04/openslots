@@ -1,6 +1,12 @@
+import path from 'node:path'
+
 import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
+  // The Docker image runs Next's standalone server. Tracing starts at the
+  // workspace root so the packages under packages/ are included.
+  output: process.env.NEXT_OUTPUT === 'standalone' ? 'standalone' : undefined,
+  outputFileTracingRoot: path.join(__dirname, '../..'),
   // The workspace packages are consumed as TypeScript source during
   // development; their package.json `publishConfig` points npm at `dist`.
   transpilePackages: ['@openslots/core', '@openslots/react'],

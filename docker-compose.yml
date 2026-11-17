@@ -1,0 +1,51 @@
+# OpenSlots with its own MongoDB, for a single server.
+#
+#   cp .env.example .env      # then fill in the required values
+#   docker compose up -d --build
+#
+# See docs/self-hosting.md. Put a reverse proxy with HTTPS in front of port
+# 3000; BETTER_AUTH_URL must be the public https:// address customers use.
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_POSTHOG_KEY: ${NEXT_PUBLIC_POSTHOG_KEY:-}
+    image: openslots:local
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_CONNECTION_STRING: mongodb://mongo:27017
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET in .env}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:?Set BETTER_AUTH_URL in .env}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?Set GOOGLE_CLIENT_ID in .env}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?Set GOOGLE_CLIENT_SECRET in .env}
+      OPENSLOTS_ALLOWED_EMAILS: ${OPENSLOTS_ALLOWED_EMAILS:-}
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-0}
+      OPENSLOTS_AUTO_INDEX: ${OPENSLOTS_AUTO_INDEX:-1}
+      API_SLOTS_IP_LIMIT: ${API_SLOTS_IP_LIMIT:-60}
+      API_WRITE_IP_LIMIT: ${API_WRITE_IP_LIMIT:-10}
+      API_SLOTS_KEY_LIMIT: ${API_SLOTS_KEY_LIMIT:-600}
+      API_WRITE_KEY_LIMIT: ${API_WRITE_KEY_LIMIT:-100}
+    ports:
+      # Bound to this machine only; the reverse proxy reaches it here.
+      - '127.0.0.1:${OPENSLOTS_PORT:-3000}:3000'
+
+  mongo:
+    image: mongo:8
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test:
+        ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  mongo-data:
