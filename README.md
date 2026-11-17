@@ -4,7 +4,17 @@ Free, open source, self-hosted appointment booking. Sign in with Google, link yo
 
 One install serves every business you run. MIT licensed.
 
-> **Status: planning complete, build not started.** There is no runnable code yet.
+> **Status: v1 is being built.** The workspace runs, but the product is not usable yet.
+
+## Development
+
+```sh
+pnpm install
+pnpm run dev:fake   # the app with an in-memory MongoDB and no Google account
+pnpm run ci         # lint, typecheck, test, build
+```
+
+See [AGENTS.md](AGENTS.md) for every command.
 
 ## What it will do
 

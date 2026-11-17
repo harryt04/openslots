@@ -10,7 +10,7 @@ Items marked **Verify** are believed correct but must be confirmed against curre
 | --- | --- |
 | Runtime | Node.js 26, pnpm 11 (pinned in `package.json`), committed `pnpm-lock.yaml` |
 | App | Next.js 16 App Router, React, TypeScript strict. `proxy.ts`, not `middleware.ts` |
-| UI | shadcn/ui (new-york), Tailwind CSS v4, Geist and Geist Mono, lucide-react, next-themes |
+| UI | shadcn/ui (new-york), Tailwind CSS v4, Geist and Geist Mono (the self-hosted `geist` package, no font CDN), lucide-react, next-themes. React 19 in the app |
 | Forms and validation | react-hook-form, zod |
 | Auth | Better Auth, Google social provider only, MongoDB adapter |
 | Database | MongoDB, native driver. Must work on a standalone server: **no multi-document transactions** |
@@ -37,7 +37,9 @@ packages/react/           @openslots/react: BookingFlow, SlotPicker, ServiceList
 docs/                     PRD, TRD, design spec, self-host guide
 ```
 
-`pnpm-workspace.yaml` lists `apps/*` and `packages/*`. Root scripts: `dev`, `build`, `lint`, `typecheck`, `test`, `e2e`, `ci` (lint, typecheck, test, build).
+`pnpm-workspace.yaml` lists `apps/*` and `packages/*`. Root scripts: `dev`, `build`, `lint`, `typecheck`, `test`, `e2e`, `ci` (lint, typecheck, test, build). Also `dev:fake` (the app with an in-memory MongoDB and fakes, used by Playwright), `create-indexes`, `prettify` and `format:check`.
+
+The app consumes the workspace packages as TypeScript source (`transpilePackages`); each package's `publishConfig` points npm at its tsup `dist`. Development-only routes live under `app/dev/` and return 404 in production.
 
 ## 3. Data model
 
@@ -157,15 +159,15 @@ Admin actions (S2 to S7) use Next.js server actions or route handlers behind the
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | yes | Sign-in and calendar access |
 | `OPENSLOTS_ALLOWED_EMAILS` | no | Sign-in allowlist |
 | `NEXT_PUBLIC_POSTHOG_KEY`, `NEXT_PUBLIC_POSTHOG_HOST` | no | Analytics |
-| `E2E_FAKE_GOOGLE` | no | Tests only: use the in-memory calendar provider. Must refuse to enable when `NODE_ENV=production` |
+| `E2E_FAKE_GOOGLE` | no | Tests and local UI work only: use the in-memory calendar provider and enable the test sign-in at `/dev/sign-in` (the only time email and password sign-in exists). Must refuse to enable when `NODE_ENV=production`. `pnpm run dev:fake` sets it and starts an in-memory MongoDB |
 
 ## 11. Testing and CI
 
 - **Unit:** slot engine (section 4), zod schemas, key and token helpers.
-- **Integration (Vitest with a real MongoDB, via `mongodb-memory-server` or a service container):** booking write path including the concurrency test, cancel, reschedule, tenant isolation, rate limits, origin checks.
+- **Integration (Vitest with a real MongoDB, via `mongodb-memory-server`):** booking write path including the concurrency test, cancel, reschedule, tenant isolation, rate limits, origin checks.
 - **End to end (Playwright, fake Google):** owner setup; customer books on the hosted page; slot taken; reschedule; cancel; reconnect state; embedded component on a plain test page.
 - **Visual:** each screen checked against the design spec in light and dark; screenshots attached to pull requests.
-- **CI (GitHub Actions):** `pnpm install --frozen-lockfile`, lint, typecheck, unit and integration tests, build, Playwright. Required on every pull request.
+- **CI (GitHub Actions):** `pnpm install --frozen-lockfile`, format check, lint, typecheck, unit and integration tests, build, Playwright. Runs on every pull request, whatever its base branch, so stacked slices are checked too.
 
 ## 12. Deployment
 

@@ -1,0 +1,178 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * OpenSlots design tokens: the Voltage theme.
+ *
+ * Source of truth: the <style> block of docs/design/openslots-design.html.
+ * The hex values below are copied from it; do not invent colors (T-1).
+ * This file is the only place in the app where a raw color may appear.
+ *
+ * Read this before using `accent`:
+ *   The spec's `--accent` is tangerine and means "chosen slot, key CTA".
+ *   shadcn/ui components use the `accent` utility for something else: the
+ *   quiet hover and highlight surface of ghost buttons, menu items and
+ *   calendar cells. The spec uses `--primary-soft` for that role.
+ *   So in the Tailwind theme below:
+ *     bg-accent / text-accent-foreground          -> --primary-soft (quiet hover)
+ *     bg-accent-strong / text-accent-strong-foreground -> --accent (tangerine)
+ *   The CSS variable `--accent` itself keeps the spec's tangerine value.
+ */
+:root {
+  --radius: 10px;
+
+  --background: #fbfaff;
+  --foreground: #14102b;
+  --card: #ffffff;
+  --muted: #f1eefc;
+  --muted-foreground: #5a5578;
+  --border: #e1dbf7;
+  --input: #cfc7f0;
+  --primary: #5b34f5;
+  --primary-foreground: #ffffff;
+  --primary-soft: #e9e3ff;
+  --accent: #ff6a13;
+  --accent-foreground: #1f0e00;
+  --accent-soft: #ffe7d6;
+  --highlight: #ffc21a;
+  --highlight-foreground: #241a00;
+  --sidebar: #f3efff;
+  --destructive: #b93a00;
+  --destructive-foreground: #ffffff;
+  --ring: #5b34f5;
+
+  /* Service colors: the Okabe-Ito set, fixed in both modes. */
+  --svc-blue: #0072b2;
+  --svc-orange: #e69f00;
+  --svc-sky: #56b4e9;
+  --svc-vermillion: #d55e00;
+  --svc-pink: #cc79a7;
+  --svc-yellow: #f0e442;
+  /* Text drawn on top of a service color (the spec's slot blocks in S4). */
+  --svc-foreground: #2a0a1c;
+
+  /* Code blocks keep one dark surface in both modes (spec `pre`). */
+  --code: #12102a;
+  --code-foreground: #e8e4ff;
+  --code-keyword: #ff9f5a;
+  --code-string: #7fd4ff;
+  --code-comment: #8d88b5;
+  --code-type: #ffd45a;
+}
+
+.dark {
+  --background: #0c0a1a;
+  --foreground: #f3f0ff;
+  --card: #141127;
+  --muted: #1d1936;
+  --muted-foreground: #a9a4c8;
+  --border: #2c2650;
+  --input: #3a3366;
+  --primary: #8b70ff;
+  --primary-foreground: #0c0a1a;
+  --primary-soft: #251d52;
+  --accent: #ff7f33;
+  --accent-foreground: #1f0e00;
+  --accent-soft: #3d1f0c;
+  --highlight: #ffc21a;
+  --highlight-foreground: #241a00;
+  --sidebar: #110e22;
+  --destructive: #ff8a4d;
+  --destructive-foreground: #0c0a1a;
+  --ring: #8b70ff;
+}
+
+@theme inline {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--card);
+  --color-popover-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+  --color-secondary: var(--muted);
+  --color-secondary-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  /* See the note at the top of this file. */
+  --color-accent: var(--primary-soft);
+  --color-accent-foreground: var(--foreground);
+  --color-accent-strong: var(--accent);
+  --color-accent-strong-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-highlight: var(--highlight);
+  --color-highlight-foreground: var(--highlight-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--foreground);
+  --color-sidebar-primary: var(--primary);
+  --color-sidebar-primary-foreground: var(--primary-foreground);
+  --color-sidebar-accent: var(--primary-soft);
+  --color-sidebar-accent-foreground: var(--foreground);
+  --color-sidebar-border: var(--border);
+  --color-sidebar-ring: var(--ring);
+
+  --color-svc-blue: var(--svc-blue);
+  --color-svc-orange: var(--svc-orange);
+  --color-svc-sky: var(--svc-sky);
+  --color-svc-vermillion: var(--svc-vermillion);
+  --color-svc-pink: var(--svc-pink);
+  --color-svc-yellow: var(--svc-yellow);
+  --color-svc-foreground: var(--svc-foreground);
+
+  --color-code: var(--code);
+  --color-code-foreground: var(--code-foreground);
+  --color-code-keyword: var(--code-keyword);
+  --color-code-string: var(--code-string);
+  --color-code-comment: var(--code-comment);
+  --color-code-type: var(--code-type);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/*
+ * T-6: a visible 2px focus ring in --ring on every interactive element.
+ * This rule is deliberately outside any @layer so that it wins over the
+ * `outline-none` and translucent ring utilities inside components/ui, which
+ * must not be hand-edited.
+ */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  --tw-ring-shadow: 0 0 #0000;
+}
+
+/*
+ * T-4: the generated destructive button and badge use white text on a
+ * translucent fill in dark mode, which fails contrast on Voltage's light
+ * dark-mode destructive color. Give them the solid token pair instead.
+ * Unlayered for the same reason as the focus rule above.
+ */
+.dark .dark\:bg-destructive\/60 {
+  background-color: var(--destructive);
+  color: var(--destructive-foreground);
+}

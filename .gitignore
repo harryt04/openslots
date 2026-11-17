@@ -1,11 +1,33 @@
-node_modules/
-.next/
-dist/
+# dependencies
+node_modules
+.pnpm-store
+
+# build output
+.next
+out
+dist
+build
+*.tsbuildinfo
+next-env.d.ts
+
+# testing
+coverage
+test-results
+playwright-report
+blob-report
+.playwright
+
+# env: only .env.example is committed
 .env
 .env.*
 !.env.example
+
+# misc
+.DS_Store
+*.pem
+npm-debug.log*
+.vercel
 .lavish/
-*.tsbuildinfo
-coverage/
-test-results/
-playwright-report/
+
+# local browser-check screenshots; published to the pr-assets branch
+.screenshots/

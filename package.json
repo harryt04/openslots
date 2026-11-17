@@ -1,0 +1,33 @@
+{
+  "name": "openslots",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": "26.x"
+  },
+  "packageManager": "pnpm@11.28.12",
+  "scripts": {
+    "dev": "pnpm --filter @openslots/web dev",
+    "dev:fake": "pnpm --filter @openslots/web dev:fake",
+    "build": "pnpm -r run build",
+    "lint": "pnpm -r run lint",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "e2e": "pnpm --filter @openslots/web e2e",
+    "ci": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build",
+    "create-indexes": "pnpm --filter @openslots/web create-indexes",
+    "prettify": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "^3.10.1",
+    "prettier-plugin-tailwindcss": "^0.8.1"
+  },
+  "config": {
+    "mongodbMemoryServer": {
+      "preferGlobalPath": "true",
+      "version": "8.2.6"
+    }
+  }
+}
