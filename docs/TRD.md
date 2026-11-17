@@ -110,6 +110,7 @@ Because all service durations and intervals are multiples of 5 minutes, block al
 - **Client.** A small interface, `CalendarProvider`, with `listCalendars`, `freeBusy(calendarIds, from, to)`, `createEvent`, `updateEvent`, `deleteEvent`. Two implementations: Google (plain `fetch` against the REST API, no SDK) and an in-memory fake used by tests and by `E2E_FAKE_GOOGLE=1`.
 - **Caching.** Free/busy for slot listing may be cached for up to 60 seconds per business and range. The booking write path never uses the cache.
 - **Failure.** Any auth failure marks the link `needs_reconnect`. While any blocking calendar's link is in that state, the slots endpoint returns no slots and a `calendar_unavailable` reason (S6-3: fail closed).
+- **Reconnecting.** Reconnect goes through Better Auth's `linkSocial`, not a plain sign-in: only linking updates the stored scopes, so an owner who unticked a calendar permission at first consent stays broken until they reconnect that way. A 403 from Google counts as an auth failure only for `insufficientPermissions`, `authError` and `ACCESS_TOKEN_SCOPE_INSUFFICIENT`; any other 403 (for example no write access to one shared calendar) is an ordinary calendar error and must not mark the link `needs_reconnect`.
 - **Self-hosting trap.** A Google OAuth client left in "Testing" publishing status expires refresh tokens after 7 days. The self-host guide must cover moving it to production.
 
 ## 7. Public API (`/api/v1`)

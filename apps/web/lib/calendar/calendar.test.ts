@@ -122,12 +122,15 @@ describe('shared fake calendar', () => {
 })
 
 it.each([
-  'insufficientPermissions',
-  'forbidden',
-  'ACCESS_TOKEN_SCOPE_INSUFFICIENT',
-  'rateLimitExceeded',
-  'userRateLimitExceeded',
-])('classifies Google 403 %s', async (reason) => {
+  ['insufficientPermissions', true],
+  ['authError', true],
+  ['ACCESS_TOKEN_SCOPE_INSUFFICIENT', true],
+  // Reconnecting cannot fix these, so they must not mark a link broken.
+  ['forbidden', false],
+  ['forbiddenForNonOrganizer', false],
+  ['rateLimitExceeded', false],
+  ['userRateLimitExceeded', false],
+])('classifies Google 403 %s (needs reconnect: %s)', async (reason, isAuth) => {
   const request = vi
     .fn<typeof fetch>()
     .mockResolvedValue(
@@ -136,13 +139,10 @@ it.each([
         { status: 403 },
       ),
     )
-  await expect(
-    new GoogleCalendarProvider(async () => 'token', request).listCalendars(),
-  ).rejects.toBeInstanceOf(
-    reason.includes('Rate') || reason === 'rateLimitExceeded'
-      ? CalendarError
-      : CalendarAuthError,
-  )
+  const error = await new GoogleCalendarProvider(async () => 'token', request)
+    .listCalendars()
+    .catch((e: unknown) => e)
+  expect(error).toBeInstanceOf(isAuth ? CalendarAuthError : CalendarError)
 })
 it.each([404, 410])('delete tolerates missing event %s', async (status) => {
   await new GoogleCalendarProvider(

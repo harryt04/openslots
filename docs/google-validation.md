@@ -30,3 +30,6 @@ References: [Better Auth Google](https://www.better-auth.com/docs/authentication
   identity on sign-in and linking, plus database user/session creation guards.
   An account-create hook cannot validate a different linked email: the account
   data has no email, and the owner's email is not the linked identity.
+- Untick a calendar permission on the Google consent screen at first sign-in, confirm the calendar is reported as needing a reconnect, then reconnect from the Calendars page (which uses `linkSocial`) with every permission ticked and confirm it recovers. A plain sign-out and sign-in does not update the stored scopes.
+- Choose a calendar shared with you read-only as the booking calendar and confirm a booking attempt reports a calendar error without marking the account as needing a reconnect.
+- After upgrading `better-auth`, re-run `apps/web/lib/auth-callback.test.ts`: the allowlist relies on its `user.validateUserInfo` option.

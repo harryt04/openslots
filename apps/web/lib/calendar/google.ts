@@ -44,7 +44,10 @@ export class GoogleCalendarProvider implements CalendarProvider {
       if (
         response.status === 403 &&
         (reasons.some((reason: string) =>
-          ['insufficientPermissions', 'forbidden'].includes(reason),
+          // Only reasons that reconnecting can fix. A plain `forbidden`
+          // usually means no write access to that one calendar, which stays
+          // a CalendarError(403) so the owner is told to pick another.
+          ['insufficientPermissions', 'authError'].includes(reason),
         ) ||
           detail.error?.status === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT')
       )
