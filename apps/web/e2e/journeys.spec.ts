@@ -164,11 +164,33 @@ test('built package on a plain second origin enforces CORS, books, and rejects a
     await embedded.reload()
     // The private /business response may remain cached for 60 seconds.
     // A fresh slots request must reject the old key immediately.
+    // Wait for the refused slots request itself: a loading spinner also has
+    // role "status" and no enabled days, so those alone would prove nothing.
+    // The browser reports a refused cross-origin call either as a 401
+    // response or, when it blocks the response for lacking CORS headers, as
+    // a failed request. Either way it must be the slots call itself.
+    const isSlots = (url: string) => new URL(url).pathname === '/api/v1/slots'
+    const refused = Promise.race([
+      embedded.waitForResponse(
+        (response) => isSlots(response.url()) && response.status() === 401,
+      ),
+      embedded.waitForEvent('requestfailed', (request) =>
+        isSlots(request.url()),
+      ),
+    ])
     await embedded.getByRole('button', { name: /Trim/ }).click()
-    await expect(embedded.getByRole('status')).toBeVisible()
+    await refused
     await expect(
       embedded.locator('[data-date]:not([aria-disabled])'),
     ).toHaveCount(0)
+    // And directly: the old key is rejected, the new one accepted.
+    expect(
+      (
+        await page.request.get('/api/v1/business', {
+          headers: { 'X-OpenSlots-Key': key },
+        })
+      ).status(),
+    ).toBe(401)
   } finally {
     await guest.close()
   }

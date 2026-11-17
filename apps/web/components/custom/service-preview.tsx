@@ -71,7 +71,7 @@ export function ServicePreview({
         </PreviewMessage>
       ) : preview.kind === 'invalid' ? (
         <PreviewMessage title="Preview">
-          Fix the highlighted fields to see the start times.
+          Fix the fields marked with an error to see the start times.
         </PreviewMessage>
       ) : preview.kind === 'closed' ? (
         <PreviewMessage title="Preview">

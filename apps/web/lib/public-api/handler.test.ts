@@ -1213,7 +1213,10 @@ for (const seed of [17, 903, 4421])
             gate.ready.then(() => true),
             moving.then(() => false),
           ])
-          expect(reached).toBe(true)
+          // An offered time can still be refused before Google is reached
+          // (for example the day's cap place is held by a booking awaiting
+          // cleanup). That refusal is safe; it just is not this scenario.
+          if (!reached) expect((await moving).status).toBe(409)
           if (reached) {
             await sweep()
             await call(
@@ -2249,6 +2252,10 @@ it('sweep takes oldest eligible tombstones first rather than insertion order', a
     rev: 0,
     purgeAfter: new Date(0),
     syncAt: new Date(100000 - i * 1000),
+    // Without this the query planner reads through an index that already
+    // returns rows in syncAt order, and the test passes with the sort
+    // removed. Mixing an explicit false with an absent field defeats that.
+    ...(i >= 25 ? { cleanup: false } : {}),
   }))
   await db.collection('bookings').insertMany(rows)
   await sweep()
