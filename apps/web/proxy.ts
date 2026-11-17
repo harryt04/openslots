@@ -21,6 +21,8 @@ export function proxy(request: NextRequest) {
   }
 
   const response = NextResponse.next()
+  response.headers.set('X-Content-Type-Options', 'nosniff')
+  response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
   const embeddable = /^\/b\//.test(request.nextUrl.pathname)
   const manage = request.nextUrl.pathname.startsWith('/m/')
   // Public customer pages talk only to this origin: analytics hosts are not
@@ -35,6 +37,7 @@ export function proxy(request: NextRequest) {
   )
   if (manage) {
     // The token in the URL is the credential.
+    response.headers.set('Cache-Control', 'no-store')
     response.headers.set('X-Robots-Tag', 'noindex, nofollow')
     response.headers.set('Referrer-Policy', 'no-referrer')
   }

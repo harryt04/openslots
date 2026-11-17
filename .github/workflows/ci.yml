@@ -15,11 +15,15 @@ concurrency:
 env:
   BETTER_AUTH_SECRET: ci-secret-min-32-chars-long!!!!!!
   BETTER_AUTH_URL: http://localhost:3000
+  GOOGLE_CLIENT_ID: placeholder
+  GOOGLE_CLIENT_SECRET: placeholder
   MONGO_CONNECTION_STRING: mongodb://localhost:27017
 
 jobs:
   validate:
     name: Lint, typecheck, test, build
+    env:
+      NEXT_PUBLIC_POSTHOG_KEY: phc_production_smoke_placeholder
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +35,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run format:check
       - run: pnpm run ci
+      - run: pnpm --filter @openslots/web exec playwright install --with-deps chromium
+      - run: pnpm --filter @openslots/web prod-smoke
 
   e2e:
     name: Playwright

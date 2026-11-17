@@ -10,6 +10,7 @@
  */
 import { spawn } from 'node:child_process'
 import {
+  createWriteStream,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -78,8 +79,16 @@ async function main() {
     `[dev:fake] app at ${origin}, test sign-in at ${origin}/dev/sign-in`,
   )
 
+  // Each fake run starts with a fresh database and compilation graph. Reusing
+  // Turbopack's persisted dev tasks across repeated runs produced a stale-task
+  // panic; keep production build artifacts intact for prod-smoke.
+  rmSync('.next/dev', { recursive: true, force: true })
+  mkdirSync('.next', { recursive: true })
+  const serverLog = createWriteStream('.next/dev-fake-server.log', {
+    flags: 'w',
+  })
   const next = spawn('next', ['dev', '--port', port], {
-    stdio: 'inherit',
+    stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
       NODE_ENV: 'development',
@@ -90,6 +99,15 @@ async function main() {
         process.env.BETTER_AUTH_SECRET ??
         'dev-fake-secret-not-for-production!!',
     },
+  })
+
+  next.stdout.on('data', (chunk) => {
+    serverLog.write(chunk)
+    process.stdout.write(chunk)
+  })
+  next.stderr.on('data', (chunk) => {
+    serverLog.write(chunk)
+    process.stderr.write(chunk)
   })
 
   let stopping = false

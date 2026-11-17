@@ -45,6 +45,8 @@ Run from the repository root. Node 26 (`.nvmrc`) and pnpm 11 (pinned in `package
 | `pnpm run build` | Build the packages with tsup and the app with Next. The app build needs `MONGO_CONNECTION_STRING`, `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` set; placeholder values are fine. |
 | `pnpm run ci` | lint, typecheck, test, build. Run before opening a pull request. |
 | `pnpm run e2e` | Playwright against `dev:fake` on port 3100 (`E2E_PORT` to change). First run: `pnpm --filter @openslots/web exec playwright install chromium`. |
+| `pnpm --filter @openslots/web prod-smoke` | After `pnpm run build`: checks a production server sends no analytics from public pages, hides `/dev/*` and refuses fake mode. CI runs it. |
+| `VISUAL_PASS=1 pnpm --filter @openslots/web exec playwright test e2e/visual-pass.spec.ts --workers=1` | The scripted visual pass behind `docs/design/CHECKS.md`: screenshots, contrast, focus outlines. Skipped in the ordinary suite. |
 | `pnpm run create-indexes` | Create MongoDB indexes for the database selected by `NODE_ENV`. Reads `apps/web/.env.local` if present. |
 | `pnpm run prettify` / `pnpm run format:check` | Prettier, write or check. CI checks. |
 
@@ -53,6 +55,7 @@ Run one package with `pnpm --filter @openslots/core test` (or `@openslots/react`
 ## Things that are easy to get wrong
 
 - **`bg-accent` is not the tangerine accent.** shadcn/ui uses the `accent` utility for quiet hover surfaces, so it maps to the spec's `--primary-soft`. The spec's tangerine `--accent` (chosen slot, key CTA) is `bg-accent-strong text-accent-strong-foreground`. The note at the top of `apps/web/app/globals.css` explains it.
+- **Form errors get their icon from `globals.css`**, not from the component: shadcn's `FormMessage` is colored text only, so a rule there adds the warning icon and a thicker border on the invalid field. Use `FormMessage` (or copy that pattern) for any new error text.
 - **Statuses go through `StatusBadge`** (`apps/web/components/custom/status-badge.tsx`), which pairs every state with an icon or strike-through. Add a new state there, not as an ad hoc colored badge.
 - **Admin code gets its business from `requireBusiness()`** (`apps/web/lib/businesses/current.ts`). It returns `{ session, business, businesses }`: the current business, always owned by the session's user, or redirects to `/onboarding`. Call it in every admin page, server action and route handler; never read `businesses` by id yourself. The two exceptions are creating a business and switching to one, which run before a current business applies: they use `requireSession()` and the owner-scoped repository functions. Below it, `lib/businesses/repository.ts` has only owner-scoped functions (each takes the user id), so a new admin query for a business's data takes `business._id` from `requireBusiness()`. The `openslots_business` cookie is only a hint and is re-validated on every call.
 - **Signed-in code calls `requireSession()`** from `apps/web/lib/session.ts`. The `(dashboard)` layout guards too, but a layout does not stop its page from rendering.

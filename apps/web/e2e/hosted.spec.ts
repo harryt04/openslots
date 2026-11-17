@@ -170,23 +170,41 @@ test('two customers, one time: the second is told it is gone and sees fresh time
     email: 'second@example.test',
   })
 
-  // The first customer takes that same time while the second is typing.
-  const booked = await bookCutAndStyle(first.page, salon.slug, {
+  await first.page.goto(`/b/${salon.slug}/cut-and-style`)
+  expect(await chooseTime(flow(first.page), 0)).toBe(label)
+  await flow(first.page).getByRole('button', { name: 'Continue' }).click()
+  await fillDetails(flow(first.page), {
     name: 'First Person',
     email: 'first@example.test',
   })
-  expect(booked.label).toBe(label)
 
-  await flow(second.page)
-    .getByRole('button', { name: 'Confirm booking' })
-    .click()
+  const results = await Promise.all(
+    [first, second].map(async (guest) => {
+      const response = guest.page.waitForResponse(
+        (r) =>
+          r.request().method() === 'POST' &&
+          new URL(r.url()).pathname === '/api/v1/bookings',
+      )
+      await flow(guest.page)
+        .getByRole('button', { name: 'Confirm booking' })
+        .click()
+      return (await response).status()
+    }),
+  )
+  expect(results.filter((status) => status === 201)).toHaveLength(1)
+  expect(results.filter((status) => status === 409)).toHaveLength(1)
+  const loser = results[0] === 409 ? first : second
+  const winner = results[0] === 201 ? first : second
   await expect(
-    flow(second.page).getByText(/someone booked that time a moment ago/i),
+    flow(winner.page).getByRole('heading', { name: "You're booked" }),
+  ).toBeVisible()
+  await expect(
+    flow(loser.page).getByText(/someone booked that time a moment ago/i),
   ).toBeVisible()
   // Back on the time step, with fresh times: the taken one is gone.
-  await expect(flow(second.page).getByText('Step 2 of 4')).toBeVisible()
-  await readyGrid(flow(second.page))
-  const times = flow(second.page).getByRole('group').getByRole('button')
+  await expect(flow(loser.page).getByText('Step 2 of 4')).toBeVisible()
+  await readyGrid(flow(loser.page))
+  const times = flow(loser.page).getByRole('group').getByRole('button')
   await expect(times.first()).toBeVisible()
   expect(await times.allInnerTexts()).not.toContain(label)
 
@@ -267,6 +285,9 @@ test('reschedule moves the event; the overlap and cancel rules are plain (S10-1,
   // S10-1: reached by the token alone.
   const manage = await c.goto(booked.manageUrl)
   expect(manage?.status()).toBe(200)
+  expect(manage?.headers()['cache-control']).toContain('no-store')
+  expect(manage?.headers()['referrer-policy']).toBe('no-referrer')
+  expect(manage?.headers()['x-content-type-options']).toBe('nosniff')
   expect(manage?.headers()['x-robots-tag']).toContain('noindex')
   await expect(c.locator('meta[name=robots]')).toHaveAttribute(
     'content',
@@ -381,6 +402,7 @@ test('cancel asks first, removes the event and frees the time for someone else',
   // Keeping the booking changes nothing.
   await dialog.getByRole('button', { name: 'Keep booking' }).click()
   await expect(dialog).toHaveCount(0)
+  await expect(c.getByRole('button', { name: 'Cancel booking' })).toBeFocused()
   expect(
     Object.values((await calendarState(page, salon.accountId)).events),
   ).toHaveLength(1)

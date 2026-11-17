@@ -139,6 +139,35 @@ export async function handle(
         { status: 405, headers },
       )
     }
+    // Bound the stream itself, including unknown JSON fields and cancel bodies.
+    // Content-Length alone is supplied by the caller and cannot enforce a cap.
+    let body: unknown = null
+    if (request.method === 'POST') {
+      const reader = request.body?.getReader()
+      const chunks: Uint8Array[] = []
+      let size = 0
+      if (reader) {
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            size += value.byteLength
+            if (size > 16384) {
+              await reader.cancel()
+              throw new ApiFailure('invalid_request')
+            }
+            chunks.push(value)
+          }
+        } finally {
+          reader.releaseLock()
+        }
+      }
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      } catch {
+        /* Schema reports invalid JSON where a body is required. */
+      }
+    }
     const outgoing = <T>(schema: z.ZodType<T>, value: unknown): T => {
       const result = schema.safeParse(value)
       if (!result.success) {
@@ -183,10 +212,7 @@ export async function handle(
         ),
       )
     } else if (route === 'bookings') {
-      const input = parse(
-        createBookingBodySchema,
-        await request.json().catch(() => null),
-      )
+      const input = parse(createBookingBodySchema, body)
       response = Response.json(
         outgoing(
           createBookingResponseSchema,
@@ -201,10 +227,7 @@ export async function handle(
       if (route === 'cancel')
         booking = await cancelBooking(business, booking._id)
       if (route === 'reschedule') {
-        const input = parse(
-          rescheduleBodySchema,
-          await request.json().catch(() => null),
-        )
+        const input = parse(rescheduleBodySchema, body)
         booking = await rescheduleBooking(
           business,
           booking._id,

@@ -64,6 +64,7 @@
 }
 
 .dark {
+  --brand-panel-foreground: var(--primary-foreground);
   --background: #0c0a1a;
   --foreground: #f3f0ff;
   --card: #141127;
@@ -167,6 +168,11 @@
 :focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
+  /* shadcn's transition-all otherwise interpolates outline-width from the
+   * unfocused CSS `medium` (3px) to 2px. Keyboard focus must be visible at
+   * its specified width immediately, including the first animation frame. */
+  transition-property:
+    color, background-color, border-color, opacity, box-shadow, transform;
   --tw-ring-shadow: 0 0 #0000;
 }
 
@@ -191,4 +197,32 @@
     var(--muted-foreground) 0 1.5px,
     transparent 1.5px 6px
   );
+}
+
+/*
+ * T-5: a form error must not be told apart by color alone. shadcn's
+ * FormMessage is only colored text, and an invalid input only gets a colored
+ * border. Both come from components/ui, which is not hand-edited, so the
+ * non-color cues are added here: a warning triangle before every form error,
+ * and a thicker border on the invalid control.
+ */
+[data-slot='form-message'] {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+  font-weight: 500;
+}
+[data-slot='form-message']::before {
+  content: '';
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.125rem;
+  background-color: currentColor;
+  /* lucide "triangle-alert" */
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/%3E%3Cpath d='M12 9v4'/%3E%3Cpath d='M12 17h.01'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+[aria-invalid='true']:is(input, textarea, select, button) {
+  border-width: 2px;
 }

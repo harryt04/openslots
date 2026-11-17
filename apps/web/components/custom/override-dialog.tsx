@@ -106,6 +106,9 @@ function OverrideForm({
             <div className="flex justify-center rounded-md border">
               <Calendar
                 mode="single"
+                // Days of the neighbouring months are drawn too faintly to read
+                // (3.4:1 in light mode); the month arrows reach them instead.
+                showOutsideDays={false}
                 selected={date ? dateFromLocalDate(date) : undefined}
                 defaultMonth={dateFromLocalDate(date ?? today)}
                 onSelect={(d) => setDate(d ? localDateFromDate(d) : null)}

@@ -110,7 +110,22 @@ test('create, list, pause and edit a service with a live preview', async ({
   await page.getByLabel('Custom duration in minutes').fill('62')
   await page.getByRole('button', { name: 'Save changes' }).click()
   await expect(page.getByText('Must be a multiple of 5 minutes')).toBeVisible()
-  await expect(preview).toContainText('Fix the highlighted fields')
+  // T-5: the error is marked by more than color: a warning icon before the
+  // message and a thicker border on the field.
+  const errorMark = await page
+    .getByText('Must be a multiple of 5 minutes')
+    .evaluate((el) => {
+      const before = getComputedStyle(el, '::before')
+      return { width: before.width, mask: before.maskImage }
+    })
+  expect(errorMark.width).toBe('16px')
+  expect(errorMark.mask).toContain('svg')
+  expect(
+    await page
+      .getByLabel('Custom duration in minutes')
+      .evaluate((el) => getComputedStyle(el).borderTopWidth),
+  ).toBe('2px')
+  await expect(preview).toContainText('Fix the fields marked with an error')
   await page.getByLabel('Custom duration in minutes').fill('75')
   await page.getByRole('button', { name: 'Save changes' }).click()
   await expect(page).toHaveURL(/\/services$/)
