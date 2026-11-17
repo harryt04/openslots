@@ -18,7 +18,7 @@ If the code and these documents disagree, say so and fix whichever is wrong in t
 - **The slot engine is pure** and lives in `packages/core`. Nothing else computes availability.
 - **One booking UI.** The hosted pages use `@openslots/react` from the workspace.
 - **Add shadcn components with the CLI** (`pnpm dlx shadcn@latest add <name>`); do not hand-edit `components/ui`.
-- **Colors come from tokens.** No raw hex in components; `apps/web/app/globals.css` is the only file that holds color values. Any state shown with color also needs an icon, label or text decoration; never rely on red versus green. The maintainer is colorblind.
+- **Colors come from tokens.** No raw hex in components except the isolated Google brand mark SVG; `apps/web/app/globals.css` is the only file that holds color values. Any state shown with color also needs an icon, label or text decoration; never rely on red versus green. The maintainer is colorblind.
 - **Next.js 16 uses `proxy.ts`**, exporting `proxy`, not `middleware.ts`.
 - **Secrets stay out of the repository.** Document new variables in `.env.example` and TRD section 10.
 - **Every admin query is scoped** to a business owned by the session's user.
@@ -56,7 +56,18 @@ Run one package with `pnpm --filter @openslots/core test` (or `@openslots/react`
 - **Statuses go through `StatusBadge`** (`apps/web/components/custom/status-badge.tsx`), which pairs every state with an icon or strike-through. Add a new state there, not as an ad hoc colored badge.
 - **Admin code gets its business from `requireBusiness()`** (`apps/web/lib/businesses/current.ts`). It returns `{ session, business, businesses }`: the current business, always owned by the session's user, or redirects to `/onboarding`. Call it in every admin page, server action and route handler; never read `businesses` by id yourself. The two exceptions are creating a business and switching to one, which run before a current business applies: they use `requireSession()` and the owner-scoped repository functions. Below it, `lib/businesses/repository.ts` has only owner-scoped functions (each takes the user id), so a new admin query for a business's data takes `business._id` from `requireBusiness()`. The `openslots_business` cookie is only a hint and is re-validated on every call.
 - **Signed-in code calls `requireSession()`** from `apps/web/lib/session.ts`. The `(dashboard)` layout guards too, but a layout does not stop its page from rendering.
-- **Development-only routes live under `apps/web/app/dev/`** and return 404 in production. `/dev/tokens` shows every token and base primitive in light and dark.
+- **Development-only routes live under `apps/web/app/dev/`** and return 404 in production. `/dev/calendar` seeds and inspects fake account calendar state. `/dev/tokens` shows every token and base primitive in light and dark.
 - **Workspace packages export TypeScript source** to the app (`exports` in their `package.json`); `publishConfig` points npm at `dist`. The app does not need the packages built first.
 - **The shadcn CLI may write a wrong `cn` import** (`from "cn"`) into new components in this workspace. Correct it to `@/lib/utils`; that is the one hand-edit allowed in `components/ui`.
 - **For browser checks use `agent-browser`** with a session named for your worktree, against `pnpm run dev:fake`.
+
+## Fake calendar contract
+
+Fake sign-in creates a Better Auth `providerId: 'google'` account record.
+In both modes, look up the user's Google accounts and pass that record's id:
+`calendarProvider({ id: account.id, userId: session.user.id })`. Never branch at call sites.
+The default account has a writable `primary` calendar. Server-side tests can call
+`seedFakeCalendar(accountId, { calendars, busy, authFailure })`; the returned state
+records events and create/update/delete operations. State survives module reloads
+in the development server through globalThis, and is lost on server exit.
+The email/password route at /dev/sign-in remains fake-only and is absent in production.

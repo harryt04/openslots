@@ -109,13 +109,14 @@ Because all service durations and intervals are multiples of 5 minutes, block al
 
 ## 6. Google integration
 
-- **Sign-in and consent.** Better Auth Google provider with `accessType: 'offline'`, `prompt: 'consent'` and added scopes. **Verify** the option names.
-- **Scopes.** `calendar.freebusy` (read busy times), `calendar.calendarlist.readonly` (list calendars to choose from), `calendar.events` (create, change and delete bookings). Event details are never read (S6-4). **Verify** that `calendar.events.owned` is not sufficient before settling on the broader scope.
-- **Tokens.** Stored by Better Auth in `account`; refreshed through Better Auth's access-token API rather than hand-rolled. Enable encryption of stored OAuth tokens. **Verify** both.
-- **More than one Google account per business.** Use Better Auth account linking with different email addresses allowed. **Verify.**
+- **Sign-in and consent.** Better Auth Google provider uses `accessType: 'offline'`, `prompt: 'consent'` and `scope`. Confirmed against [Better Auth Google documentation](https://www.better-auth.com/docs/authentication/google).
+- **Scopes.** `calendar.freebusy`, `calendar.calendarlist.readonly`, `calendar.events`. Event details are never read (S6-4). Google's [scope reference](https://developers.google.com/workspace/calendar/api/auth) limits `calendar.events.owned` to owned calendars; OpenSlots permits writable shared booking calendars, so the broader events scope is required.
+- **Tokens.** Better Auth stores encrypted access/refresh tokens with `account.encryptOAuthTokens: true` (using `BETTER_AUTH_SECRET`). Server callers use `auth.api.getAccessToken({ body: { accountId, userId } })`, where accountId is the Better Auth record id. It refreshes expired tokens and persists replacements. See [OAuth](https://www.better-auth.com/docs/concepts/oauth) and [options](https://www.better-auth.com/docs/reference/options). HTTP token/profile endpoints are blocked so tokens never reach the browser. Keep the secret stable and backed up.
+- **More than one Google account per business.** Explicit signed-in `linkSocial` with `account.accountLinking.allowDifferentEmails: true` supports different emails ([account linking](https://www.better-auth.com/docs/concepts/users-accounts#account-linking)). The calendar settings UI ships in 2C. Every linked Google identity must also pass the instance email allowlist; linking does not grant ownership of another user's businesses.
 - **Client.** A small interface, `CalendarProvider`, with `listCalendars`, `freeBusy(calendarIds, from, to)`, `createEvent`, `updateEvent`, `deleteEvent`. Two implementations: Google (plain `fetch` against the REST API, no SDK) and an in-memory fake used by tests and by `E2E_FAKE_GOOGLE=1`.
 - **Caching.** Free/busy for slot listing may be cached for up to 60 seconds per business and range. The booking write path never uses the cache.
 - **Failure.** Any auth failure marks the link `needs_reconnect`. While any blocking calendar's link is in that state, the slots endpoint returns no slots and a `calendar_unavailable` reason (S6-3: fail closed).
+- **Reconnecting.** Reconnect goes through Better Auth's `linkSocial`, not a plain sign-in: only linking updates the stored scopes, so an owner who unticked a calendar permission at first consent stays broken until they reconnect that way. A 403 from Google counts as an auth failure only for `insufficientPermissions`, `authError` and `ACCESS_TOKEN_SCOPE_INSUFFICIENT`; any other 403 (for example no write access to one shared calendar) is an ordinary calendar error and must not mark the link `needs_reconnect`.
 - **Self-hosting trap.** A Google OAuth client left in "Testing" publishing status expires refresh tokens after 7 days. The self-host guide must cover moving it to production.
 
 ## 7. Public API (`/api/v1`)
@@ -166,7 +167,7 @@ Admin actions (S2 to S7) use Next.js server actions or route handlers behind the
 - OAuth tokens encrypted at rest; never logged; never sent to the browser.
 - The publishable key grants only: read business, read slots, create a booking, and manage a booking with its token.
 - Manage tokens are single-booking, unguessable, stored hashed.
-- `OPENSLOTS_ALLOWED_EMAILS` (comma-separated, optional) restricts who may sign in to an instance. When unset, any Google account may sign in; the self-host guide says so plainly.
+- `OPENSLOTS_ALLOWED_EMAILS` (comma-separated, optional) restricts who may sign in to an instance. It is checked at sign-in/linking only; removing an email does not terminate existing sessions. Google emails must be verified. When unset, any Google account may sign in; the self-host guide says so plainly.
 - Customer data held: name, email, optional phone and notes. No tracking of customers; PostHog is off by default and never loaded on booking pages or by the npm package.
 - Standard headers: CSP on app pages, `frame-ancestors` relaxed only for booking pages.
 
@@ -197,4 +198,4 @@ Admin actions (S2 to S7) use Next.js server actions or route handlers behind the
 
 ## 13. Open technical questions
 
-None block the build. The **Verify** items in section 6 are to be settled in slice 1B.
+None block the build. Section 6 documentation checks were settled in slice 1B; live Google consent and refresh still require the maintainer validation in docs/google-validation.md.
