@@ -1,17 +1,24 @@
 import type { Metadata } from 'next'
 
-import { PageHeader } from '@/components/custom/page-header'
+import { ScheduleEditor } from '@/components/custom/schedule-editor'
 import { requireBusiness } from '@/lib/businesses/current'
+import { listSchedules } from '@/lib/schedules/repository'
 
 export const metadata: Metadata = { title: 'Availability' }
 
-// Placeholder: slice 2B replaces the content.
 export default async function Page() {
-  await requireBusiness()
+  const { business } = await requireBusiness()
+  const schedules = await listSchedules(business._id)
   return (
-    <PageHeader
-      title="Availability"
-      description="The days and hours customers may book. Google events are subtracted on top of this."
+    <ScheduleEditor
+      key={business._id.toHexString()}
+      schedules={schedules.map((s) => ({
+        id: s._id.toHexString(),
+        name: s.name,
+        timezone: s.timezone,
+        weekly: s.weekly,
+        overrides: s.overrides,
+      }))}
     />
   )
 }
