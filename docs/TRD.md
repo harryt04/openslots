@@ -373,3 +373,17 @@ with window.location.href from the redirect response; it does not submit a form
 to Google. Keep form-action 'self'. Manage pages use frame-ancestors 'self';
 public booking pages remain embeddable.
 
+### Owner bookings dashboard (slice 4B)
+
+The owner dashboard reads only the current business from `requireBusiness()`.
+Upcoming and Past split on the booking start instant; Cancelled includes all
+cancelled bookings. Abandoned attempts are excluded throughout. Lists return
+50 rows per page (plus one lookahead), bounded by start and served by the
+existing `{businessId,status,start}` index. Literal customer name/email search
+escapes regular expression metacharacters and is capped at 200 characters;
+it filters the tenant/status index scan rather than a global collection scan.
+Today and Monday–Sunday week totals count confirmed bookings by business-local
+start date and use snapshot durations. Openings load in a separate Suspense
+boundary through `availableSlots`, with explicit unavailability on calendar
+failure. Owner mutations validate inputs, reload the booking scoped to the
+current business, then use the shared revision-based booking service.
