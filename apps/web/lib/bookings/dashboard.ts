@@ -45,12 +45,15 @@ export async function dashboardRows(
       { 'customer.name': { $regex: pattern, $options: 'i' } },
       { 'customer.email': { $regex: pattern, $options: 'i' } },
     ]
-  return (await bookings())
-    .find(filter)
-    .sort({ start: tab === 'past' ? -1 : 1 })
-    .skip(Math.max(0, Math.floor(Math.min(page, 10000))) * 50)
-    .limit(51)
-    .toArray()
+  return (
+    (await bookings())
+      .find(filter)
+      // Newest first for what has already happened or been cancelled.
+      .sort({ start: tab === 'upcoming' ? 1 : -1 })
+      .skip(Math.max(0, Math.floor(Math.min(page, 10000))) * 50)
+      .limit(51)
+      .toArray()
+  )
 }
 export async function upcomingCount(businessId: ObjectId, now = new Date()) {
   return (await bookings()).countDocuments({

@@ -1,7 +1,7 @@
-import { availableSlots } from '@/lib/bookings/service'
-import { weekRange } from '@/lib/bookings/dashboard'
+import { openSlotsThisWeek } from '@/lib/bookings/open-slots'
 import type { BusinessDoc } from '@/lib/businesses/repository'
 import type { ServiceDoc } from '@/lib/services/repository'
+
 export async function OpenSlots({
   business,
   services,
@@ -9,32 +9,7 @@ export async function OpenSlots({
   business: BusinessDoc
   services: ServiceDoc[]
 }) {
-  const { from, to } = weekRange(new Date(), business.timezone)
-  let count: number | null = 0
-  try {
-    const results = await Promise.all(
-      services
-        .filter((s) => s.active)
-        .map((s) =>
-          availableSlots(
-            business,
-            String(s._id),
-            { from, to },
-            business.timezone,
-          ),
-        ),
-    )
-    if (results.some((r) => 'reason' in r)) count = null
-    else
-      count = results.reduce(
-        (n, r) =>
-          n +
-          Object.values(r.days).reduce((sum, slots) => sum + slots.length, 0),
-        0,
-      )
-  } catch {
-    count = null
-  }
+  const count = await openSlotsThisWeek(business, services)
   return (
     <>
       <p className="font-mono text-3xl font-semibold">
