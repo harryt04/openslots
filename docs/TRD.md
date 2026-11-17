@@ -27,8 +27,8 @@ The starting point is the maintainer's scaffold at `github.com/harryt04/personal
 apps/web/                 Next.js app: admin, hosted booking pages, public API
   app/(dashboard)/        signed-in routes (S2–S7); layout guards the session
   app/login/              S1
-  app/b/[business]/       S8 hosted booking page, /b/[business]/[service]
-  app/m/[token]/          S10 manage a booking
+  app/(public)/b/[business]/   S8 hosted booking page, /b/[business]/[service]
+  app/(public)/m/[token]/      S10 manage a booking
   app/api/auth/[...all]/  Better Auth handler
   app/api/v1/             public API
   lib/                    auth, mongo client, google client, repositories
@@ -319,7 +319,7 @@ Admin actions (S2 to S7) use Next.js server actions or route handlers behind the
 | `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` | yes | Auth |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | yes | Sign-in and calendar access |
 | `OPENSLOTS_ALLOWED_EMAILS` | no | Sign-in allowlist |
-| `NEXT_PUBLIC_POSTHOG_KEY`, `NEXT_PUBLIC_POSTHOG_HOST` | no | Analytics |
+| `NEXT_PUBLIC_POSTHOG_KEY` | no | Analytics on signed-in pages, page views only. Read at build time. Events go through this origin at `/ingest` to PostHog's US endpoint; there is no host setting |
 | `TRUSTED_PROXY_HOPS` | no | Default `0` means no per-IP limit; the per-key bucket is the only rate-limit protection. When set, the app must be reachable only through the proxy. App server clocks must agree. Count trusted hops from the right of X-Forwarded-For; use `1` behind one nginx/Coolify proxy that appends the client address. |
 | `API_SLOTS_IP_LIMIT`, `API_WRITE_IP_LIMIT` | no | Per-minute IP limits, defaults 60 and 10. Positive integers. |
 | `API_SLOTS_KEY_LIMIT`, `API_WRITE_KEY_LIMIT` | no | Separate per-minute key limits, defaults 600 and 100. Positive integers. |

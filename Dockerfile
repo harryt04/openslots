@@ -31,13 +31,11 @@ COPY . .
 # Analytics are off unless a key is given at build time; it is inlined into
 # the browser bundle, so it cannot be set later.
 ARG NEXT_PUBLIC_POSTHOG_KEY=""
-ARG NEXT_PUBLIC_POSTHOG_HOST=""
 # The app reads these while Next collects page data during the build. These
 # are placeholders: nothing connects, and the real values come from the
 # environment when the container runs.
 ENV NEXT_OUTPUT=standalone \
     NEXT_PUBLIC_POSTHOG_KEY=$NEXT_PUBLIC_POSTHOG_KEY \
-    NEXT_PUBLIC_POSTHOG_HOST=$NEXT_PUBLIC_POSTHOG_HOST \
     MONGO_CONNECTION_STRING=mongodb://build-placeholder:27017 \
     BETTER_AUTH_SECRET=build-time-placeholder-not-used-at-runtime \
     BETTER_AUTH_URL=http://localhost:3000
