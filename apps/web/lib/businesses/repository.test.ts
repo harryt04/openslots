@@ -211,9 +211,24 @@ const TRD_INDEXES: Record<
   services: [{ key: { businessId: 1, slug: 1 }, unique: true }],
   schedules: [{ key: { businessId: 1 }, unique: false }],
   calendar_links: [{ key: { businessId: 1, accountId: 1 }, unique: true }],
-  booking_day_counts: [],
+  cap_locks: [
+    { key: { businessId: 1, capKey: 1 }, unique: true },
+    { key: { opId: 1 }, unique: false },
+    { key: { bookingId: 1 }, unique: false },
+    { key: { createdAt: 1 }, unique: false },
+  ],
   bookings: [
-    { key: { status: 1, deadline: 1 }, unique: false },
+    { key: { status: 1, expiresAt: 1 }, unique: false },
+    { key: { cleanup: 1 }, unique: false },
+    { key: { eventSync: 1 }, unique: false },
+    { key: { 'pendingOp.startedAt': 1 }, unique: false },
+    { key: { purgeAfter: 1 }, unique: false },
+    { key: { status: 1, end: 1 }, unique: false },
+    { key: { businessId: 1, prevStart: 1, prevEnd: 1 }, unique: false },
+    {
+      key: { businessId: 1, serviceId: 1, status: 1, capManaged: 1 },
+      unique: false,
+    },
     { key: { businessId: 1, start: 1 }, unique: false },
     { key: { manageTokenHash: 1 }, unique: true },
     { key: { businessId: 1, status: 1, start: 1 }, unique: false },
@@ -221,6 +236,8 @@ const TRD_INDEXES: Record<
   slot_locks: [
     { key: { businessId: 1, block: 1 }, unique: true },
     { key: { bookingId: 1 }, unique: false },
+    { key: { opId: 1 }, unique: false },
+    { key: { createdAt: 1 }, unique: false },
   ],
 }
 

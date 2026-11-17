@@ -12,8 +12,22 @@ export type BookingDoc = {
   >
   start: Date
   end: Date
-  status:
-    'pending' | 'confirmed' | 'cancelled' | 'abandoned' | 'recovery_required'
+  status: 'pending' | 'confirmed' | 'cancelled'
+  rev: number
+  opId: string
+  prevOpId?: string
+  prevStart?: Date
+  prevEnd?: Date
+  capOpId?: string
+  prevCapOpId?: string
+  capManaged?: true
+  pendingOp?: { opId: string; startedAt: Date }
+  expiresAt?: Date
+  abandoned?: true
+  cleanup?: true
+  eventSync?: true
+  purgeAfter?: Date
+  syncAt?: Date
   customer: {
     name: string
     email: string
@@ -25,18 +39,17 @@ export type BookingDoc = {
   googleEventId?: string
   calendar?: { accountId: string; calendarId: string }
   rescheduledFrom?: Date
-  capacityKey?: string
-  deadline?: Date
-  changingTarget?: Date
-  changingAt?: Date
-  changing?: boolean
   createdAt: Date
   updatedAt: Date
 }
 export const bookings = async () =>
   (await getDb()).collection<BookingDoc>('bookings')
 export async function getBooking(businessId: ObjectId, id: ObjectId) {
-  return (await bookings()).findOne({ businessId, _id: id })
+  return (await bookings()).findOne({
+    businessId,
+    _id: id,
+    abandoned: { $ne: true },
+  })
 }
 export async function listBookings(
   businessId: ObjectId,
@@ -47,7 +60,7 @@ export async function listBookings(
     search?: string
   } = {},
 ) {
-  const filter: Filter<BookingDoc> = { businessId }
+  const filter: Filter<BookingDoc> = { businessId, abandoned: { $ne: true } }
   if (options.status) filter.status = options.status
   if (options.from || options.to)
     filter.start = {

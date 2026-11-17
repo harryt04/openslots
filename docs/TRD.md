@@ -43,7 +43,7 @@ The app consumes the workspace packages as TypeScript source (`transpilePackages
 
 ## 3. Data model
 
-Collections belong to the app database. Every document except Better Auth's and the derived `booking_day_counts` counters has `createdAt` and `updatedAt`. IDs are `ObjectId` unless stated.
+Collections belong to the app database. Application records have timestamps; lock documents have `createdAt`. IDs are `ObjectId` unless stated.
 
 | Collection | Fields | Indexes |
 | --- | --- | --- |
@@ -53,9 +53,9 @@ Collections belong to the app database. Every document except Better Auth's and 
 | `schedules` | `businessId`, `name`, `timezone`, `weekly` (7 entries, each a list of `{startMin, endMin}`), `overrides[]` `{date: 'YYYY-MM-DD', ranges[]}` (empty ranges means closed) | `businessId` |
 | `calendar_links` | `businessId`, `accountId` (Better Auth account), `email`, `calendars[]` `{calendarId, name, blocks, writable}`, `status` (`ok` or `needs_reconnect`), `lastCheckedAt`, `needsReconnectSince?` (first auth failure, cleared on successful refresh) | unique `{businessId, accountId}` |
 | `calendar_link_returns` | `nonce`, `userId`, `businessId`, `accountId?` (reconnect intent; absent for link), `snapshot[]` (owned account ids), `expiresAt`, timestamps; consumed once by the authenticated return handler | unique `nonce`; TTL `expiresAt` (0 seconds) |
-| `bookings` | `businessId`, `serviceId`, service snapshot (`name`, `durationMin`, buffers), `start`, `end`, `status` (`pending`, `confirmed`, `cancelled`, `abandoned`, `recovery_required`), `deadline`, `changingAt?`, `changingTarget?`, `capacityKey?`, `customer` `{name, email, phone?, notes?, timezone}`, `googleEventId?`, `manageTokenHash`, `rescheduledFrom?`, `origin?` | `{businessId, start}`; unique `manageTokenHash`; `{businessId, status, start}`; `{status, deadline}` |
-| `booking_day_counts` | deterministic string `_id` from business, service and schedule-local date; `count`, `bookings[]` (idempotent reservation ownership) | unique `_id` |
-| `slot_locks` | `businessId`, `block` (integer: UTC epoch minutes ÷ 5), `bookingId` | **unique `{businessId, block}`**; `bookingId` |
+| `bookings` | `businessId`, `serviceId`, service snapshot, `start`, `end`, `status` (only pending, confirmed, cancelled), `rev` (integer from 0), `opId`, `prevOpId?`, `prevStart?`, `prevEnd?`, `capOpId?`, `prevCapOpId?`, `capManaged?: true`, `pendingOp?: {opId, startedAt}`, `expiresAt?`, `abandoned?: true`, `cleanup?: true`, `eventSync?: true`, `syncAt?`, `purgeAfter?`, customer, calendar destination snapshot, `googleEventId?`, `manageTokenHash`, `rescheduledFrom?` | unique manageTokenHash; {businessId,start}; {businessId,status,start}; {status,expiresAt}; cleanup; eventSync; pendingOp.startedAt; purgeAfter; {status,end}; {businessId,prevStart,prevEnd}; {businessId,serviceId,status,capManaged} |
+| `cap_locks` | `businessId`, `bookingId`, `opId`, `createdAt`, `capKey = serviceId\|schedule-local date\|i` | unique {businessId,capKey}; bookingId; opId; createdAt |
+| `slot_locks` | `businessId`, `block` (UTC epoch minutes ÷ 5), `bookingId`, `opId`, `createdAt` | **unique {businessId,block}**; bookingId; opId; createdAt |
 
 `schedules.weekly[0]` is Sunday (as `Date.getDay()`); a new business gets one schedule, Monday to Friday 09:00 to 17:00 in its timezone. Publishable keys are `os_pk_` plus 24 random bytes, base64url. Business slugs are global, 3 to 40 characters of `a-z0-9-`, and a reserved list of app routes is refused. Service slugs are unique only within their business, may be shorter, and have no reserved list. Admin code reaches businesses only through `requireBusiness()` in `apps/web/lib/businesses/current.ts`, which re-validates the remembered business (cookie `openslots_business`) against `ownerUserId` on every call. Creating a business and switching to one use the session and the owner-scoped repository directly. Schedules are reached only through `apps/web/lib/schedules/repository.ts`, which takes the business id from `requireBusiness()`, validates with `scheduleSchema` from `@openslots/core`, refuses to delete a business's last schedule, and refuses to delete one that a service (`services.scheduleId`, ObjectId or hex string) uses. Without transactions the last-schedule rule is re-checked after the delete and the document is put back if none remain. The in-use check and the delete are separate operations, so a service created at that instant can be left pointing at a missing schedule; anything that loads a service's schedule must treat a missing one as no availability and must never fall back to another schedule. Saving a schedule replaces it whole with no revision check: with two stale tabs the last save wins. Date overrides are labelled Closed, Extra day (the weekday is normally closed), Short day (less time, within the usual opening and closing), Usual hours (exactly the usual times) or Changed hours (anything else). Creating a business writes two documents without a transaction: if the schedule write fails, the business is deleted again. A service's slug is derived from its name when it is created (`cut-and-style`, then `cut-and-style-2`, …), unique per business through the `{businessId, slug}` index (a duplicate-key error moves to the next candidate), and kept when the service is renamed so shared links keep working. Admin service queries live in `apps/web/lib/services/repository.ts` and all take the business id from `requireBusiness()`.
 
@@ -94,39 +94,142 @@ Required tests: spring-forward and fall-back days in `America/Denver` and `Europ
 
 ## 5. Booking write path (R7, R8)
 
-MongoDB runs without transactions, so correctness rests on the unique index on `slot_locks`.
+MongoDB standalone has no transactions. Mutual exclusion rests on the unique
+`slot_locks {businessId, block}` index and the startup guard, never on a read
+followed by a write. The booking document is truth; Google and locks converge to
+it. Every booking update filters on its id and the revision read, and increments
+`rev`. A lost revision returns 409 and may undo only its operation's locks.
+Deletes of failed initial pending inserts also filter on revision zero.
 
-1. Validate the request with zod. Load business, service, schedule.
-2. Fetch fresh Google free/busy for the day (no cache) and existing bookings; run `computeSlots`; reject with `409 slot_taken` if the requested start is not in the result.
-3. Insert the booking with `status: 'pending'`.
-4. Insert one `slot_locks` document for every 5 minute block in `[start − bufferBefore, start + duration + bufferAfter)` with `insertMany(..., { ordered: false })`.
-5. On any duplicate-key error: delete this booking's locks and the booking; respond `409 slot_taken`.
-6. Create the Google Calendar event on the business's booking calendar with the customer as attendee and `sendUpdates: 'all'`.
-7. On Google failure, delete the deterministic event id before releasing locks, capacity and the booking. If deletion fails, retain locks and mark `recovery_required`; log only the booking id for operator reconciliation. Auth failures mark the link `needs_reconnect`.
-8. Confirm only if exactly one pending document matches and its stored deadline is still in the future. Otherwise delete the deterministic event and clean up, returning `409 slot_taken`.
+### State and ownership
 
-Pending attempts store a 180-second deadline. Each token fetch is bounded to 15 seconds (up to two attempts); each Google HTTP operation is bounded to 15 seconds. The event creation budget is therefore at most 45 seconds, well below the deadline. Token timeouts are transient errors, never reconnect errors.
+Statuses are exactly pending, confirmed and cancelled. An operation UUID tags all
+of its locks. `opId` owns the current occupied interval; `prevOpId` and
+`prevStart/prevEnd` retain the previous interval until event sync succeeds.
+`capOpId` owns a daily place independently of the current slot operation.
+`prevCapOpId` retains the previous date's place. `pendingOp` is the revision
+fenced reschedule claim. Pending attempts expire after three minutes.
+`abandoned: true` means never confirmed and is excluded from every repository
+listing and manage lookup. `cleanup` and `eventSync` express durable work,
+not extra statuses. Admin callers use the exported cancel/reschedule functions
+and repositories expose both flags.
 
-Daily caps reserve an atomic conditional increment in `booking_day_counts` after locks, per business/service/schedule-local date. Reservation ids make release idempotent. Release on failure and cancel; reserve the new date before rescheduling and release the old date after the document moves. Ambiguous operations retain capacity in the safe direction.
+### Create
 
-Cancel deletes the event and releases locks/capacity. Reschedule acquires new locks and capacity, patches the event, moves the booking document, then deletes old locks and releases old capacity. An ambiguous patch retains both intervals and marks `recovery_required` for operator reconciliation. Changes store `changingAt`; a claim older than 180 seconds can be taken over.
+Validate, load the exact schedule, and check fresh free/busy with computeSlots.
+Insert pending at revision zero with a fresh operation id, expiry three minutes
+away, and capManaged true before taking any locks if this service has a cap.
+Insert slot locks, then a cap lock. Duplicate/full means delete only this
+operation's locks and the pending revision-zero document, then 409 slot_taken.
+Immediately before Google create require at least 60 seconds left on expiry.
+Use the deterministic event id. Confirm by revision CAS from pending, while
+expiry remains in the future, storing googleEventId and capOpId. Only a matched
+confirmation returns 201.
 
-Sweeps are throttled per process to once per 30 seconds, with an indexed status/deadline query. They atomically claim expired pending attempts as `abandoned`, delete their deterministic calendar event (if any), delete their locks and capacity, then delete the booking. A failed event deletion retains the attempt as recovery_required. Sweeps resume abandoned cleanup. A stale-lock pass removes orphan locks and confirmed bookings' surplus locks, while preserving pending, changing and recovery-required attempts. Extra locks after a crash are safe until collected.
+Calendar failure or lost confirmation CAS transitions the pending revision to
+cancelled, abandoned, cleanup, with purgeAfter one hour away; reconcile inline.
+If that CAS loses, touch no locks; delete the deterministic event again to catch
+a late create. Calendar failures return 502; lost confirmation returns 409.
+Ambiguous database acknowledgements are re-read: an already confirmed creation
+is retained, and a committed move never releases its own locks on an exception.
 
-Overlapping reschedules fail closed for v1: free/busy has no event identity and subtracting the booking's interval could hide another event. Manage endpoints return `booking_not_changeable` with guidance to choose a nonoverlapping time or cancel and book again. No event details are read.
+### Cancel and reschedule
 
-Because all service durations and intervals are multiples of 5 minutes, block alignment is exact. A required test fires at least 20 concurrent requests for overlapping times and asserts exactly one `201`.
+Cancellation first CASes confirmed to cancelled with cleanup and purgeAfter one
+hour away, clearing pendingOp; nothing is deleted before this write. Run
+reconcile inline and return success even when cleanup remains. Already cancelled
+is an idempotent success. A live syncAt lease is preserved so cleanup cannot
+overtake an in-flight patch.
 
-### Proposed revision-fenced replacement: unresolved safety issues
+Reschedule refuses pendingOp younger than two minutes and any eventSync,
+prevOpId or prevCapOpId with a try-again message. Occupied intervals including
+both buffers must not overlap the current interval, uniformly for blocking and
+nonblocking booking calendars. Never subtract the booking from Google busy data.
+An inactive/missing service, missing schedule or past booking cannot move.
 
-The replacement state machine requested after the second review is **not yet implemented**. The implementation above remains vulnerable to the reviewed stale-operation races and must not be treated as safe for production booking. Moving booking writes to revision compare-and-set alone does not resolve the following issues:
+Claim revision r to r+1 with pendingOp N. Check fresh availability using the
+original service duration/buffers snapshot, take N's slot locks, and take a new
+cap place if changing local dates on a capped service. Failure releases only N's
+locks and clears pendingOp by CAS r+1. Commit by CAS r+1 to the new interval,
+opId N, previous operation/interval, rescheduledFrom and eventSync, clearing the
+claim. Lost commit releases N and returns 409. A matched commit makes the move
+durable; Google failure afterwards does not roll it back. Reconcile inline.
+A concurrent cancellation before the response yields 409 rather than reporting
+a successful move of a cancelled record.
 
-- The proposed cap calculation counts every pending/confirmed booking without a cap lock as legacy usage. A newly inserted pending attempt itself meets that predicate. With a cap of one, even the first attempt gets zero positions; simultaneous pending attempts can also consume all the apparent legacy allowance. The calculation must distinguish pre-cap bookings from operations still acquiring their place, including excluding the attempting booking.
-- A successful move keeps `prevOpId` until event reconciliation finishes. Allowing another move before that finishes overwrites the only reference to the first interval's locks. Safest behavior is to refuse further moves while `eventSync` is set.
-- Same-date moves retain a cap lock owned by the old operation, but successful reconciliation deletes that operation's locks. The cap place needs explicit durable ownership across moves, or a new reservation before each move (which conservatively refuses some moves on full days).
-- Revision checks fence MongoDB writes, not an already issued Google request. A create paused before its Google write can resume after an expired attempt was reconciled and deleted, leaving an event with no booking document for a future sweep to find. A patch paused before its Google write can likewise finish after cancellation reconciliation. The fake provider currently implements patch as an upsert, making this latter resurrection directly reproducible. Recovery needs durable intent/tombstones through the external-operation uncertainty window, plus provider semantics that do not resurrect deleted events. Client request timeouts alone do not prove the server did not apply a write later.
+### Daily caps
 
-The replacement must specify these cases before section 5 can truthfully describe it as implemented. Required crash, stalled-operation, randomized invariant and reachable-state tests for that replacement remain outstanding.
+For cap n, count u other pending/confirmed bookings of that service on that
+schedule-local date without capManaged true. These are legacy uncapped bookings;
+new managed pending attempts never count in u. Try inserting positions
+0 through n-u-1 until one wins the unique business/capKey index; otherwise 409.
+A service with no cap sets no capManaged and takes no place. Existing places
+remain when a cap is removed, until their bookings end.
+
+A same-date move keeps capOpId and inserts/deletes no cap place. Cross-date moves
+of a capped service take N's place, commit capOpId N and prevCapOpId old, then
+reconcile the old place. A legacy cross-date move becomes capManaged.
+computeSlots receives counts per service/date for confirmed and unexpired
+pending bookings, independently of lock acquisition.
+
+### Reconciliation and sweep
+
+Reconcile always re-reads first and CASes a syncAt lease; a lease younger than
+two minutes refuses another reconciler. Auth failures mark needs_reconnect.
+Transient failures retain all time and work intent and clear the owned lease.
+
+Cancelled cleanup deletes the event (deterministic id if no googleEventId).
+404/410 are success. Only after success delete all slot and cap locks for that
+booking id, then CAS clear cleanup and sync metadata. This is the only place
+that deletes locks solely by bookingId; cancelled operations cannot commit.
+
+Confirmed eventSync patches the event to the document time, omitting description
+when no manage URL is available. A 404 recreates the deterministic event only
+after checking that the confirmed revision still owns reconciliation. On success
+delete only prevOpId's slot locks and prevCapOpId's cap lock, then CAS clear
+eventSync, previous fields and the lease. If revision ownership was lost, stop.
+
+The only background work is next/server after(), throttled to once per 30 seconds
+per process. Each phase has a fixed 50-document batch and indexed predicates. Orphan and
+ended-booking scans rotate their offset so retained records cannot permanently
+starve later cleanup candidates:
+
+1. Expired pending: CAS to cancelled/abandoned/cleanup with one-hour purgeAfter,
+   then reconcile.
+2. cleanup/eventSync: reconcile through the syncAt lease.
+3. pendingOp older than five minutes: CAS clear, fencing the original commit.
+4. Expired purgeAfter on cancelled records without cleanup: delete the event
+   once more, then revision-filtered delete if abandoned, otherwise CAS clear
+   purgeAfter and retain the cancellation record.
+5. slot/cap locks created more than ten minutes ago: read each booking after the
+   lock; delete only if absent, cancelled without cleanup, or pending/confirmed
+   with none of opId, prevOpId, capOpId, prevCapOpId, pendingOp.opId owning it.
+6. Confirmed bookings ended more than a day ago without sync/claim work: remove
+   current operation locks.
+
+Availability loads only records overlapping the expanded requested interval,
+including confirmed, unexpired pending, cleanup and retained previous intervals.
+All busy intervals include buffers. Missing schedules never fall back.
+
+### Invariants and external limit
+
+Confirmed bookings in one business never overlap occupied intervals. Every
+future confirmed booking owns exactly its current slot locks and, during sync,
+its previous interval; managed capped bookings hold their cap place. Success
+requires confirmed state with locks. The daily cap is never exceeded by managed
+admissions plus legacy usage. With Google healthy and time advanced beyond all
+bounds, sweeps leave no orphan locks, cleanup, sync, claims, previous ownership
+or abandoned documents; Google has exactly one event at each confirmed time.
+
+Google cannot be fenced by database revision. Token acquisition (including a
+retry) has a total 15-second budget; HTTP requests abort after 15 seconds.
+The 60-second reserve immediately before create means the HTTP create leaves
+this process at least 45 seconds before expiresAt, and expiry cleanup never
+starts earlier than expiresAt. A lost confirmation deletes the event itself.
+Tombstones persist for an hour even after cleanup; late-delete also applies to
+normal cancellations. Known limit: a process dies between Google accepting a
+create and cleanup, and Google applies the write over an hour late.
+The fake provider has controllable pauses and missing-event patches return 404.
 
 ## 6. Google integration
 
@@ -153,7 +256,7 @@ Every request carries `X-OpenSlots-Key: os_pk_…`. The server resolves the busi
 | `origin_not_allowed` | 403 | `Origin` is not an allowed origin |
 | `not_found` | 404 | unknown service or manage token |
 | `slot_taken` | 409 | the start is no longer open |
-| `booking_not_changeable` | 409 | cancel or reschedule of a booking that is cancelled or in the past |
+| `booking_not_changeable` | 409 | reschedule of a cancelled booking, or change of a past booking |
 | `rate_limited` | 429 | over the rate limit |
 | `internal_error` | 500 | anything unexpected |
 | `calendar_unavailable` | 502 | Google failed, or a blocking calendar needs reconnecting |
@@ -166,8 +269,8 @@ The request and response shapes below are zod schemas in `@openslots/core` (`pac
 | `GET /slots?service=&from=&to=&tz=` | Open slots | `from`/`to` are dates in `tz`, at most 62 days apart; `tz` defaults to the business timezone. Returns `{ timezone, days: { 'YYYY-MM-DD': ['ISO start', …] }, reason? }` grouped by date in `tz`, only dates with slots. `reason: 'calendar_unavailable'` when slots are withheld (section 6) |
 | `POST /bookings` | Create a booking | Body `{ serviceId, start, timezone, customer: { name, email, phone?, notes? }, website? }`; `website` is the honeypot. `201 { id, start, end, manageUrl }`, or `409 slot_taken` |
 | `GET /manage/:token` | Booking summary for the manage page: `{ id, status, start, end, timezone, service, business, customer: { name, email } }`. Cancel and reschedule return the same shape | Token is 32 random bytes, base64url; only its SHA-256 hash is stored |
-| `POST /manage/:token/cancel` | Cancel | |
-| `POST /manage/:token/reschedule` | Move to `{ start }` | Same rules as create |
+| `POST /manage/:token/cancel` | Cancel | Idempotent; durable cancellation succeeds even while event cleanup is pending |
+| `POST /manage/:token/reschedule` | Move to `{ start }` | Revision-fenced commit; event sync may remain pending; another move must wait |
 
 Rate limiting checks and increments the IP bucket first and stops immediately when it is exceeded; only an accepted IP attempt increments the shared key bucket. With zero trusted proxy hops there is no per-IP limit: the per-key bucket is the only rate-limit protection. When hops are set, the app must not be reachable except through the trusted proxy. Time bounds assume the app servers’ clocks agree.
 
@@ -210,6 +313,8 @@ Admin actions (S2 to S7) use Next.js server actions or route handlers behind the
 | `API_SLOTS_KEY_LIMIT`, `API_WRITE_KEY_LIMIT` | no | Separate per-minute key limits, defaults 600 and 100. Positive integers. |
 | `E2E_FAKE_GOOGLE` | no | Tests and local UI work only: use the in-memory calendar provider and enable the test sign-in at `/dev/sign-in` (the only time email and password sign-in exists). Must refuse to enable when `NODE_ENV=production`. `pnpm run dev:fake` sets it and starts an in-memory MongoDB |
 
+Booking reconciliation needs no new environment variables or worker process; it runs after API responses. Existing Google request bounds and proxy/rate-limit variables remain unchanged.
+
 ## 11. Testing and CI
 
 - **Unit:** slot engine (section 4), zod schemas, key and token helpers.
@@ -246,8 +351,7 @@ Race tests use distinct IPs rather than changing production defaults.
 
 Cancel permits paused/deleted services, but only future confirmed bookings.
 Reschedule requires a future confirmed booking and an active extant service;
-missing schedules offer no slots. Both serialize changes to one booking with an
-atomic `changing` claim. The original service duration/buffers snapshot is used
+missing schedules offer no slots. Both use revision-fenced booking writes and operation-owned locks. The original service duration/buffers snapshot is used
 for the moved booking. Booking destination is snapshotted to ensure subsequent
 calendar setting changes cannot redirect updates/deletes. Only the manage token
 hash is persisted; the manage URL is sent to Google in the event description.

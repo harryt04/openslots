@@ -2,6 +2,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server'
 import { ObjectId, Collection } from 'mongodb'
 import { beforeAll, afterAll, beforeEach, it, expect, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
+vi.mock('next/server', () => ({ after: () => {} }))
 vi.mock('../calendar', async () => {
   const { FakeCalendarProvider } = await import('../calendar/fake')
   return {
@@ -62,7 +63,7 @@ beforeEach(async () => {
   const db = await client.getDb()
   for (const name of [
     'bookings',
-    'booking_day_counts',
+    'cap_locks',
     'slot_locks',
     'businesses',
     'services',
@@ -179,7 +180,7 @@ it('route journey and tenant token isolation', async () => {
   expect(
     await (await client.getDb()).collection('slot_locks').countDocuments(),
   ).toBe(0)
-  expect((await call('cancel', {}, token)).status).toBe(409)
+  expect((await call('cancel', {}, token)).status).toBe(200)
 })
 it('CORS, validation, honeypot and rate limit', async () => {
   expect(
@@ -248,7 +249,11 @@ it('calendar create failure after locking removes pending booking and locks', as
     expect((await call('bookings', input())).status).toBe(502)
     spy.mockRestore()
     const db = await client.getDb()
-    expect(await db.collection('bookings').countDocuments()).toBe(0)
+    expect(
+      await db
+        .collection('bookings')
+        .countDocuments({ abandoned: { $ne: true } }),
+    ).toBe(0)
     expect(await db.collection('slot_locks').countDocuments()).toBe(0)
     expect(
       (
@@ -275,22 +280,20 @@ it('paused and foreign services are not found; missing schedule has no slots', a
       .status,
   ).toBe(404)
 })
-it('concurrent abandoned sweeps remove pending attempts and their locks only', async () => {
+it('concurrent sweeps retain an abandoned tombstone but release its locks', async () => {
+  const created = await (await call('bookings', input())).json()
   const db = await client.getDb()
-  const id = new ObjectId()
-  await db.collection('bookings').insertOne({
-    _id: id,
-    businessId: business._id,
-    status: 'pending',
-    createdAt: new Date(Date.now() - 240000),
-    deadline: new Date(Date.now() - 1000),
-  })
   await db
-    .collection('slot_locks')
-    .insertOne({ businessId: business._id, bookingId: id, block: 123 })
+    .collection('bookings')
+    .updateOne(
+      { _id: new ObjectId(created.id) },
+      { $set: { status: 'pending', expiresAt: new Date(0) } },
+    )
   const { sweepAbandoned } = await import('../bookings/service')
   await Promise.all([sweepAbandoned(), sweepAbandoned()])
-  expect(await db.collection('bookings').countDocuments()).toBe(0)
+  expect(
+    await db.collection('bookings').countDocuments({ abandoned: true }),
+  ).toBe(1)
   expect(await db.collection('slot_locks').countDocuments()).toBe(0)
 })
 it('preflight and invalid keys', async () => {
@@ -516,9 +519,10 @@ it('expired in-flight create never confirms after a second customer wins', async
     .collection('bookings')
     .updateOne(
       { status: 'pending' },
-      { $set: { deadline: new Date(Date.now() - 1) } },
+      { $set: { expiresAt: new Date(Date.now() - 1) } },
     )
   const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 240000)
+  await (await import('../bookings/service')).sweepAbandoned()
   const second = await call('bookings', input()).finally(() =>
     clock.mockRestore(),
   )
@@ -564,13 +568,11 @@ it('ambiguous create deletes the deterministic event, or retains locks for recov
     deletion.mockRestore()
     const db = await client.getDb()
     expect(
-      await db
-        .collection('bookings')
-        .countDocuments({ status: 'recovery_required' }),
+      await db.collection('bookings').countDocuments({ cleanup: true }),
     ).toBe(1)
     expect(await db.collection('slot_locks').countDocuments()).toBe(12)
     await (await import('../bookings/service')).sweepAbandoned()
-    expect(await db.collection('slot_locks').countDocuments()).toBe(12)
+    expect(await db.collection('slot_locks').countDocuments()).toBe(0)
   } finally {
     spy.mockRestore()
     log.mockRestore()
@@ -585,17 +587,22 @@ it('stale changes recover, fresh claims refuse; admin patches preserve descripti
     .collection('bookings')
     .updateOne(
       { _id: id },
-      { $set: { changing: true, changingAt: new Date() } },
+      { $set: { pendingOp: { opId: 'stale', startedAt: new Date() } } },
     )
   await expect(
     rescheduleBooking(business, id, new Date(+start + 7200000)),
-  ).rejects.toMatchObject({ code: 'booking_not_changeable' })
-  await db
-    .collection('bookings')
-    .updateOne(
-      { _id: id },
-      { $set: { changingAt: new Date(Date.now() - 240000) } },
-    )
+  ).rejects.toMatchObject({ code: 'slot_taken' })
+  await db.collection('bookings').updateOne(
+    { _id: id },
+    {
+      $set: {
+        pendingOp: {
+          opId: 'stale',
+          startedAt: new Date(Date.now() - 240000),
+        },
+      },
+    },
+  )
   const { FakeCalendarProvider } = await import('../calendar/fake')
   const patch = vi.spyOn(FakeCalendarProvider.prototype, 'updateEvent')
   try {
@@ -658,49 +665,16 @@ it('ambiguous patch holds both intervals, and overlapping moves have clear outco
           token,
         )
       ).status,
-    ).toBe(502)
+    ).toBe(200)
     const db = await client.getDb()
     expect(await db.collection('slot_locks').countDocuments()).toBe(24)
     expect(
-      await db
-        .collection('bookings')
-        .countDocuments({ status: 'recovery_required' }),
+      await db.collection('bookings').countDocuments({ eventSync: true }),
     ).toBe(1)
   } finally {
     patch.mockRestore()
     log.mockRestore()
   }
-})
-it('sweeps resume claimed cleanup, orphan cleanup and surplus confirmed locks safely', async () => {
-  const created = await (await call('bookings', input())).json()
-  const db = await client.getDb()
-  const abandoned = new ObjectId(),
-    orphan = new ObjectId()
-  await db
-    .collection('bookings')
-    .updateOne(
-      { _id: new ObjectId(created.id) },
-      { $set: { changing: true, changingAt: new Date(0) } },
-    )
-  const { reserveCapacity, capacityCount } =
-    await import('../bookings/capacity')
-  await reserveCapacity('stale-date', new ObjectId(created.id), 1)
-  await db
-    .collection('bookings')
-    .insertOne({ _id: abandoned, status: 'abandoned', deadline: new Date(0) })
-  await db.collection('slot_locks').insertMany(
-    [abandoned, orphan, new ObjectId(created.id)].map((bookingId, i) => ({
-      businessId: business._id,
-      bookingId,
-      block: i,
-      createdAt: new Date(0),
-    })),
-  )
-  const { sweepAbandoned } = await import('../bookings/service')
-  await Promise.all([sweepAbandoned(), sweepAbandoned()])
-  expect(await db.collection('slot_locks').countDocuments()).toBe(12)
-  expect(await db.collection('bookings').countDocuments()).toBe(1)
-  expect(await capacityCount('stale-date')).toBe(0)
 })
 it('reschedule across service-local dates moves capacity and leaves other services independent', async () => {
   const db = await client.getDb()
@@ -759,7 +733,7 @@ it('same-date reschedule does not count its own daily reservation', async () => 
   ).toBe(200)
 })
 
-it('crash before moving the booking document retains old and new locks', async () => {
+it('failure before moving the booking document releases only the new locks', async () => {
   const created = await (await call('bookings', input())).json()
   const original = Collection.prototype.updateOne
   const next = new Date(+start + 7200000)
@@ -786,7 +760,7 @@ it('crash before moving the booking document retains old and new locks', async (
       ).status,
     ).toBe(500)
     const db = await client.getDb()
-    expect(await db.collection('slot_locks').countDocuments()).toBe(24)
+    expect(await db.collection('slot_locks').countDocuments()).toBe(12)
     expect(
       (
         await db
@@ -807,12 +781,14 @@ it('sweep reconciles a crash after event creation before releasing locks', async
     .collection('bookings')
     .updateOne(
       { _id: new ObjectId(created.id) },
-      { $set: { status: 'pending', deadline: new Date(0) } },
+      { $set: { status: 'pending', expiresAt: new Date(0) } },
     )
   const { sweepAbandoned } = await import('../bookings/service')
   await sweepAbandoned()
   expect(Object.keys(state.events)).toHaveLength(0)
-  expect(await db.collection('bookings').countDocuments()).toBe(0)
+  expect(
+    await db.collection('bookings').countDocuments({ abandoned: true }),
+  ).toBe(1)
   expect(await db.collection('slot_locks').countDocuments()).toBe(0)
 })
 
@@ -830,4 +806,515 @@ it('an exhausted IP cannot consume the shared key allowance', async () => {
       })
     ).status,
   ).toBe(201)
+})
+
+function pauseCalendar(kind: 'create' | 'update' | 'delete') {
+  let entered!: () => void, release!: () => void
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let used = false
+  state.pause = async (operation) => {
+    if (operation !== kind || used) return
+    used = true
+    entered()
+    await gate
+  }
+  return { ready, release }
+}
+async function sweep() {
+  await (await import('../bookings/service')).sweepAbandoned()
+}
+async function assertInvariants() {
+  const db = await client.getDb()
+  const confirmed = await db
+    .collection<import('../bookings/repository').BookingDoc>('bookings')
+    .find({ status: 'confirmed' })
+    .toArray()
+  const { occupiedInterval, lockBlocks } = await import('@openslots/core')
+  for (const b of confirmed) {
+    const own = await db
+      .collection('slot_locks')
+      .find({ bookingId: b._id })
+      .toArray()
+    const expected = lockBlocks({ start: b.start, ...b.service })
+    expect(
+      own
+        .filter((l) => l.opId === b.opId)
+        .map((l) => l.block)
+        .sort(),
+    ).toEqual(expected.sort())
+    const previous =
+      b.prevOpId && b.prevStart
+        ? lockBlocks({ start: b.prevStart, ...b.service })
+        : []
+    expect(
+      own
+        .filter((l) => l.opId === b.prevOpId)
+        .map((l) => l.block)
+        .sort(),
+    ).toEqual(previous.sort())
+    expect(own.length).toBe(expected.length + previous.length)
+    if (b.capManaged)
+      expect(
+        await db
+          .collection('cap_locks')
+          .countDocuments({ bookingId: b._id, opId: b.capOpId }),
+      ).toBe(1)
+    for (const other of confirmed) {
+      if (String(b._id) >= String(other._id)) continue
+      const a = occupiedInterval({ start: b.start, ...b.service })
+      const c = occupiedInterval({ start: other.start, ...other.service })
+      expect(+a.start < +c.end && +c.start < +a.end).toBe(false)
+    }
+  }
+}
+async function drain() {
+  const db = await client.getDb()
+  state.pause = undefined
+  state.authFailure = false
+  await db
+    .collection('calendar_links')
+    .updateMany({}, { $set: { status: 'ok' } })
+  await db
+    .collection('bookings')
+    .updateMany({ status: 'pending' }, { $set: { expiresAt: new Date(0) } })
+  await db
+    .collection('bookings')
+    .updateMany(
+      {},
+      { $set: { syncAt: new Date(0), 'pendingOp.startedAt': new Date(0) } },
+    )
+  for (let i = 0; i < 4; i++) await sweep()
+  await db
+    .collection('bookings')
+    .updateMany(
+      { purgeAfter: { $exists: true } },
+      { $set: { purgeAfter: new Date(0) } },
+    )
+  for (const name of ['slot_locks', 'cap_locks'])
+    await db
+      .collection(name)
+      .updateMany({}, { $set: { createdAt: new Date(0) } })
+  for (let i = 0; i < 4; i++) await sweep()
+  expect(
+    await db.collection('bookings').countDocuments({
+      $or: [
+        { cleanup: true },
+        { eventSync: true },
+        { pendingOp: { $exists: true } },
+        { prevOpId: { $exists: true } },
+        { prevCapOpId: { $exists: true } },
+        { abandoned: true },
+      ],
+    }),
+  ).toBe(0)
+  const confirmed = await db
+    .collection('bookings')
+    .find({ status: 'confirmed' })
+    .toArray()
+  expect(Object.keys(state.events).sort()).toEqual(
+    confirmed.map((b) => b.googleEventId).sort(),
+  )
+  for (const b of confirmed) {
+    expect(state.events[b.googleEventId]!.event.start.dateTime).toBe(
+      b.start.toISOString(),
+    )
+  }
+  for (const name of ['slot_locks', 'cap_locks'])
+    for (const lock of await db.collection(name).find({}).toArray()) {
+      const b = await db.collection('bookings').findOne({
+        _id: lock.bookingId,
+        status: { $in: ['pending', 'confirmed'] },
+      })
+      expect(b).not.toBeNull()
+      expect([b!.opId, b!.capOpId]).toContain(lock.opId)
+    }
+  await assertInvariants()
+}
+
+it('cancel commits before a stalled delete and prevents both a move and target reuse race', async () => {
+  const created = await (await call('bookings', input())).json()
+  const token = created.manageUrl.split('/').pop()
+  const gate = pauseCalendar('delete')
+  const cancelled = call('cancel', {}, token)
+  await gate.ready
+  expect(
+    (
+      await call(
+        'reschedule',
+        { start: new Date(+start + 7200000).toISOString() },
+        token,
+      )
+    ).status,
+  ).toBe(409)
+  expect((await call('bookings', input())).status).toBe(409)
+  gate.release()
+  expect((await cancelled).status).toBe(200)
+  expect((await call('bookings', input())).status).toBe(201)
+  await drain()
+})
+it('a patch stalled across cancellation retains time until the cancellation reconciles', async () => {
+  const created = await (await call('bookings', input())).json()
+  const token = created.manageUrl.split('/').pop()
+  const target = new Date(+start + 7200000).toISOString()
+  const gate = pauseCalendar('update')
+  const moved = call('reschedule', { start: target }, token)
+  await gate.ready
+  expect((await call('cancel', {}, token)).status).toBe(200)
+  expect((await call('bookings', input(target))).status).toBe(409)
+  gate.release()
+  expect((await moved).status).toBe(409)
+  await drain()
+})
+it('two sweeps cannot reconcile the same revision, even if another Google call would fail', async () => {
+  const created = await (await call('bookings', input())).json()
+  const db = await client.getDb()
+  await db
+    .collection('bookings')
+    .updateOne({ _id: new ObjectId(created.id) }, { $set: { eventSync: true } })
+  const gate = pauseCalendar('update')
+  const first = sweep()
+  await gate.ready
+  state.authFailure = true
+  await sweep()
+  state.authFailure = false
+  gate.release()
+  await first
+  expect(
+    await db.collection('bookings').countDocuments({ eventSync: true }),
+  ).toBe(0)
+  await drain()
+})
+it('late creates are deleted again after tombstone cleanup', async () => {
+  const gate = pauseCalendar('create')
+  const pending = call('bookings', input())
+  await gate.ready
+  const db = await client.getDb()
+  await db
+    .collection('bookings')
+    .updateMany({}, { $set: { expiresAt: new Date(0) } })
+  await sweep()
+  expect(Object.keys(state.events)).toHaveLength(0)
+  gate.release()
+  expect((await pending).status).toBe(409)
+  // Model a server-side late application after the client's cleanup response.
+  const tombstone = await db.collection('bookings').findOne({ abandoned: true })
+  state.events[String(tombstone!._id)] = {
+    calendarId: 'primary',
+    event: {
+      summary: 'late',
+      start: { dateTime: iso },
+      end: { dateTime: new Date(+start + 3600000).toISOString() },
+      attendees: [],
+    },
+  }
+  await db
+    .collection('bookings')
+    .updateMany({}, { $set: { purgeAfter: new Date(0) } })
+  await sweep()
+  expect(Object.keys(state.events)).toHaveLength(0)
+  expect(await db.collection('bookings').countDocuments()).toBe(0)
+})
+it('cap one accepts exactly one new managed booking', async () => {
+  const db = await client.getDb()
+  await db
+    .collection('services')
+    .updateOne({ _id: service }, { $set: { maxPerDay: 1 } })
+  const results = await Promise.all(
+    Array.from({ length: 4 }, (_, i) =>
+      call('bookings', input(new Date(+start + i * 3600000).toISOString())),
+    ),
+  )
+  expect(results.filter((r) => r.status === 201)).toHaveLength(1)
+  await drain()
+})
+it('enabling a cap counts legacy bookings once under four concurrent requests', async () => {
+  expect((await call('bookings', input())).status).toBe(201)
+  const db = await client.getDb()
+  await db
+    .collection('services')
+    .updateOne({ _id: service }, { $set: { maxPerDay: 2 } })
+  const results = await Promise.all(
+    Array.from({ length: 4 }, (_, i) =>
+      call(
+        'bookings',
+        input(new Date(+start + (i + 1) * 3600000).toISOString()),
+      ),
+    ),
+  )
+  expect(results.filter((r) => r.status === 201)).toHaveLength(1)
+  expect(await db.collection('cap_locks').countDocuments()).toBe(1)
+  await drain()
+})
+it('same-date cap moves preserve the cap operation; cross-date moves replace it', async () => {
+  const db = await client.getDb()
+  await db
+    .collection('services')
+    .updateOne({ _id: service }, { $set: { maxPerDay: 1 } })
+  const created = await (await call('bookings', input())).json()
+  const token = created.manageUrl.split('/').pop()
+  const before = await db.collection('cap_locks').findOne({})
+  expect(
+    (
+      await call(
+        'reschedule',
+        { start: new Date(+start + 7200000).toISOString() },
+        token,
+      )
+    ).status,
+  ).toBe(200)
+  expect((await db.collection('cap_locks').findOne({}))!.opId).toBe(
+    before!.opId,
+  )
+  expect(
+    (
+      await call(
+        'reschedule',
+        { start: new Date(+start + 86400000).toISOString() },
+        token,
+      )
+    ).status,
+  ).toBe(200)
+  expect((await db.collection('cap_locks').findOne({}))!.opId).not.toBe(
+    before!.opId,
+  )
+  expect(await db.collection('cap_locks').countDocuments()).toBe(1)
+  await drain()
+})
+
+for (const seed of [17, 903, 4421])
+  it(`random state-machine operations preserve invariants (seed ${seed})`, async () => {
+    let randomState = seed
+    const random = (n: number) => {
+      randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0
+      return randomState % n
+    }
+    const db = await client.getDb()
+    const secondService = new ObjectId()
+    const source = await db.collection('services').findOne({ _id: service })
+    await db
+      .collection('services')
+      .insertOne({ ...source, _id: secondService, slug: 'second' })
+    await db.collection('services').updateMany({}, { $set: { maxPerDay: 2 } })
+    const tokens: string[] = []
+    const { FakeCalendarProvider } = await import('../calendar/fake')
+    for (let step = 0; step < 240; step++) {
+      await db.collection('api_rate_limits').deleteMany({})
+      const operation = random(9)
+      const time = new Date(+start + random(7) * 1800000).toISOString()
+      const token = tokens[random(Math.max(tokens.length, 1))]
+      let spy: ReturnType<typeof vi.spyOn> | undefined
+      if (operation === 6)
+        spy = vi
+          .spyOn(FakeCalendarProvider.prototype, 'updateEvent')
+          .mockRejectedValueOnce(Error('injected failure'))
+      try {
+        if (operation < 3) {
+          const response = await call('bookings', {
+            ...input(time),
+            serviceId: String(random(2) ? service : secondService),
+          })
+          if (response.status === 201) {
+            const b = await response.json()
+            tokens.push(b.manageUrl.split('/').pop())
+            expect(
+              await db.collection('bookings').countDocuments({
+                _id: new ObjectId(b.id),
+                status: 'confirmed',
+              }),
+            ).toBe(1)
+          }
+        } else if (operation === 8) {
+          const gate = pauseCalendar('create')
+          const pending = call('bookings', input(time))
+          const reached = await Promise.race([
+            gate.ready.then(() => true),
+            pending.then(() => false),
+          ])
+          if (reached) {
+            await db
+              .collection('bookings')
+              .updateMany(
+                { status: 'pending' },
+                { $set: { expiresAt: new Date(0) } },
+              )
+            await sweep()
+          }
+          gate.release()
+          const response = await pending
+          state.pause = undefined
+          if (response.status === 201)
+            tokens.push((await response.json()).manageUrl.split('/').pop())
+        } else if (operation === 3 && token) await call('cancel', {}, token)
+        else if ((operation === 4 || operation === 6) && token)
+          await call('reschedule', { start: time }, token)
+        else if (operation === 7) {
+          await db
+            .collection('bookings')
+            .updateMany(
+              { syncAt: { $exists: true } },
+              { $set: { syncAt: new Date(0) } },
+            )
+          await db
+            .collection('bookings')
+            .updateMany(
+              { pendingOp: { $exists: true } },
+              { $set: { 'pendingOp.startedAt': new Date(0) } },
+            )
+          await sweep()
+        } else await sweep()
+        await assertInvariants()
+        for (const id of [service, secondService])
+          expect(
+            await db
+              .collection('bookings')
+              .countDocuments({ serviceId: id, status: 'confirmed' }),
+          ).toBeLessThanOrEqual(2)
+      } catch (e) {
+        throw new Error(`seed ${seed}, step ${step}`, { cause: e })
+      } finally {
+        spy?.mockRestore()
+      }
+    }
+    await drain()
+  }, 30000)
+
+// The hook throws after the Nth successful database write, then refuses every
+// subsequent booking write until the simulated process has been replaced.
+for (const operation of ['create', 'cancel', 'reschedule'] as const)
+  for (
+    let crashAt = 1;
+    crashAt <= (operation === 'create' ? 4 : operation === 'cancel' ? 5 : 8);
+    crashAt++
+  )
+    it(`crash after write ${crashAt} of ${operation} converges through sweeps`, async () => {
+      const db = await client.getDb()
+      await db
+        .collection('services')
+        .updateOne({ _id: service }, { $set: { maxPerDay: 2 } })
+      let token: string | undefined
+      if (operation !== 'create')
+        token = (await (await call('bookings', input())).json()).manageUrl
+          .split('/')
+          .pop()
+      let writes = 0,
+        dead = false
+      const restores: (() => void)[] = []
+      for (const method of [
+        'insertOne',
+        'insertMany',
+        'updateOne',
+        'deleteOne',
+        'deleteMany',
+      ] as const) {
+        const original = Collection.prototype[method]
+        const spy = vi.spyOn(Collection.prototype, method)
+        // MongoDB overloads differ, but all these operations have a promise
+        // result and the hook transparently forwards their original arguments.
+        spy.mockImplementation(async function (
+          this: Collection,
+          ...args: unknown[]
+        ) {
+          if (
+            !['bookings', 'slot_locks', 'cap_locks'].includes(
+              this.collectionName,
+            )
+          )
+            return Reflect.apply(original, this, args)
+          if (dead) throw Error('simulated process stopped')
+          const result = await Reflect.apply(original, this, args)
+          if (++writes === crashAt) {
+            dead = true
+            throw Error('injected crash after write')
+          }
+          return result
+        } as never)
+        restores.push(() => spy.mockRestore())
+      }
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        if (operation === 'create') await call('bookings', input())
+        else if (operation === 'cancel') await call('cancel', {}, token)
+        else
+          await call(
+            'reschedule',
+            { start: new Date(+start + 86400000).toISOString() },
+            token,
+          )
+      } finally {
+        restores.reverse().forEach((restore) => restore())
+        log.mockRestore()
+      }
+      expect(dead).toBe(true)
+      await drain()
+    })
+
+it('manage reads validate in all persistent and in-flight states', async () => {
+  const created = await (await call('bookings', input())).json()
+  const token = created.manageUrl.split('/').pop()
+  const db = await client.getDb()
+  const states = [
+    { status: 'pending', expiresAt: new Date(Date.now() + 180000) },
+    { status: 'confirmed' },
+    {
+      status: 'confirmed',
+      pendingOp: { opId: 'flight', startedAt: new Date() },
+    },
+    {
+      status: 'confirmed',
+      eventSync: true,
+      prevOpId: 'previous',
+      prevStart: start,
+      prevEnd: new Date(+start + 3600000),
+    },
+    { status: 'cancelled', cleanup: true },
+    { status: 'cancelled', cleanup: true, abandoned: true },
+    {
+      status: 'cancelled',
+      abandoned: true,
+      purgeAfter: new Date(Date.now() + 3600000),
+    },
+  ]
+  for (const fields of states) {
+    await db
+      .collection('bookings')
+      .updateOne({ _id: new ObjectId(created.id) }, { $set: fields })
+    const response = await call('manage', undefined, token)
+    expect(response.status).toBe(fields.abandoned ? 404 : 200)
+  }
+})
+
+it('bounded orphan passes advance beyond retained current locks', async () => {
+  const db = await client.getDb()
+  for (let i = 0; i < 5; i++)
+    expect(
+      (
+        await call(
+          'bookings',
+          input(new Date(+start + i * 3600000).toISOString()),
+        )
+      ).status,
+    ).toBe(201)
+  await db
+    .collection('slot_locks')
+    .updateMany({}, { $set: { createdAt: new Date(0) } })
+  const orphan = new ObjectId()
+  await db
+    .collection('slot_locks')
+    .insertOne({
+      businessId: business._id,
+      bookingId: orphan,
+      block: 1,
+      opId: 'orphan',
+      createdAt: new Date(0),
+    })
+  for (let i = 0; i < 5; i++) await sweep()
+  expect(
+    await db.collection('slot_locks').countDocuments({ bookingId: orphan }),
+  ).toBe(0)
+  await assertInvariants()
 })

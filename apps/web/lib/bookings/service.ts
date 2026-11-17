@@ -20,6 +20,7 @@ import {
 import {
   calendarProvider,
   CalendarAuthError,
+  CalendarError,
   eventIdForBooking,
 } from '../calendar'
 import {
@@ -27,12 +28,7 @@ import {
   generateManageToken,
   tokenHash,
 } from '../public-api/security'
-import {
-  reserveCapacity,
-  releaseCapacity,
-  capacityCount,
-  sweepCapacity,
-} from './capacity'
+import { reserveCapacity } from './capacity'
 import { bookingCustomer } from './customer'
 import { bookings, type BookingDoc } from './repository'
 
@@ -76,92 +72,6 @@ export async function guardLocks() {
   }
 }
 export const ATTEMPT_MS = 180_000
-let nextSweepAt = 0
-async function maybeSweep() {
-  if (Date.now() < nextSweepAt) return
-  nextSweepAt = Date.now() + 30_000
-  try {
-    await sweepAbandoned()
-  } catch (error) {
-    nextSweepAt = 0
-    throw error
-  }
-}
-export async function sweepAbandoned() {
-  const col = await bookings()
-  const db = await getDb()
-  const now = new Date()
-  const expired = await col
-    .find({ status: { $in: ['pending', 'abandoned'] }, deadline: { $lt: now } })
-    .toArray()
-  for (const b of expired) {
-    const claimed = await col.updateOne(
-      {
-        _id: b._id,
-        status: { $in: ['pending', 'abandoned'] },
-        deadline: { $lt: now },
-      },
-      { $set: { status: 'abandoned' } },
-    )
-    if (!claimed.matchedCount) continue
-    // A process may have died after Google committed the create, before the
-    // confirmation reached MongoDB. Reconcile that event before unlocking.
-    if (b.calendar) {
-      const business = await db
-        .collection<BusinessDoc>('businesses')
-        .findOne({ _id: b.businessId })
-      try {
-        if (!business) throw new ApiFailure('calendar_unavailable')
-        const c = b.calendar
-        await calendarCall(business, c.accountId, () =>
-          calendarProvider({
-            id: c.accountId,
-            userId: business.ownerUserId,
-          }).deleteEvent(c.calendarId, eventIdForBooking(String(b._id))),
-        )
-      } catch {
-        await col.updateOne(
-          { _id: b._id, status: 'abandoned' },
-          { $set: { status: 'recovery_required' } },
-        )
-        console.error('OpenSlots booking recovery required', String(b._id))
-        continue
-      }
-    }
-    await db.collection('slot_locks').deleteMany({ bookingId: b._id })
-    await releaseCapacity(b.capacityKey, b._id)
-    await col.deleteOne({ _id: b._id, status: 'abandoned' })
-  }
-  const stale = await db
-    .collection<{ bookingId: ObjectId; block: number; createdAt: Date }>(
-      'slot_locks',
-    )
-    .find({ createdAt: { $lt: new Date(Date.now() - ATTEMPT_MS) } })
-    .toArray()
-  for (const lock of stale) {
-    const b = await col.findOne({ _id: lock.bookingId })
-    // Never collect ambiguous operations or a change still in flight.
-    if (
-      b &&
-      (b.status === 'pending' ||
-        b.status === 'recovery_required' ||
-        (b.changing &&
-          (!b.changingAt ||
-            +b.changingAt + ATTEMPT_MS > Date.now() ||
-            b.changingTarget)))
-    )
-      continue
-    if (
-      b?.status === 'confirmed' &&
-      lockBlocks({ start: b.start, ...b.service }).includes(lock.block)
-    )
-      continue
-    await db
-      .collection('slot_locks')
-      .deleteOne({ _id: lock._id, bookingId: lock.bookingId })
-  }
-  await sweepCapacity(ATTEMPT_MS)
-}
 async function calendarCall<T>(
   business: BusinessDoc,
   accountId: string,
@@ -219,28 +129,36 @@ export async function availableSlots(
   )
     .find({
       businessId: business._id,
-      status: { $in: ['pending', 'confirmed', 'recovery_required'] },
       ...(exclude ? { _id: { $ne: exclude } } : {}),
+      $and: [
+        {
+          $or: [
+            { status: 'confirmed' },
+            { status: 'pending', expiresAt: { $gt: new Date() } },
+            { cleanup: true },
+          ],
+        },
+        {
+          $or: [
+            { start: { $lt: to }, end: { $gt: from } },
+            { prevStart: { $lt: to }, prevEnd: { $gt: from } },
+          ],
+        },
+      ],
     })
     .toArray()
   const counts: Record<string, number> = {}
   for (const b of existing) {
     busy.push(occupiedInterval({ start: b.start, ...b.service }))
-    const date = localDateOf(b.start, schedule.timezone)
-    if (String(b.serviceId) === serviceId)
-      counts[date] = (counts[date] ?? 0) + 1
-  }
-  if (service.maxPerDay) {
-    for (
-      let day = Date.parse(expanded.from + 'T00:00:00Z');
-      day <= Date.parse(expanded.to + 'T00:00:00Z');
-      day += 86400000
+    if (b.prevOpId && b.prevStart)
+      busy.push(occupiedInterval({ start: b.prevStart, ...b.service }))
+    if (
+      b.status === 'confirmed' ||
+      (b.status === 'pending' && b.expiresAt && +b.expiresAt > Date.now())
     ) {
-      const date = new Date(day).toISOString().slice(0, 10)
-      counts[date] = Math.max(
-        counts[date] ?? 0,
-        await capacityCount(`${business._id}:${service._id}:${date}`, exclude),
-      )
+      const date = localDateOf(b.start, schedule.timezone)
+      if (String(b.serviceId) === serviceId)
+        counts[date] = (counts[date] ?? 0) + 1
     }
   }
   return {
@@ -279,26 +197,26 @@ async function checkStart(
   if (!Object.values(result.days).flat().includes(start.toISOString()))
     throw new ApiFailure('slot_taken')
 }
-async function acquire(b: BookingDoc, blocks: number[]) {
-  if (!blocks.length) return
+async function release(opId: string) {
+  const db = await getDb()
+  await db.collection('slot_locks').deleteMany({ opId })
+  await db.collection('cap_locks').deleteMany({ opId })
+}
+async function acquire(b: BookingDoc, opId: string, start: Date) {
   try {
     await (await getDb()).collection('slot_locks').insertMany(
-      blocks.map((block) => ({
+      lockBlocks({ start, ...b.service }).map((block) => ({
         businessId: b.businessId,
         bookingId: b._id,
+        opId,
         block,
         createdAt: new Date(),
-        updatedAt: new Date(),
       })),
       { ordered: false },
     )
   } catch (e) {
-    await (
-      await getDb()
-    )
-      .collection('slot_locks')
-      .deleteMany({ bookingId: b._id, block: { $in: blocks } })
-    if (typeof e === 'object' && e && 'code' in e && e.code === 11000)
+    await release(opId)
+    if (e && typeof e === 'object' && 'code' in e && e.code === 11000)
       throw new ApiFailure('slot_taken')
     throw e
   }
@@ -321,7 +239,6 @@ export async function createBooking(
   host: string,
 ) {
   await guardLocks()
-  await maybeSweep()
   const service = await getService(business._id, input.serviceId)
   if (!service?.active) throw new ApiFailure('not_found')
   const customer = bookingCustomer(service, input.customer)
@@ -353,7 +270,10 @@ export async function createBooking(
     start,
     end,
     status: 'pending',
-    deadline: new Date(Date.now() + ATTEMPT_MS),
+    rev: 0,
+    opId: crypto.randomUUID(),
+    expiresAt: new Date(Date.now() + ATTEMPT_MS),
+    ...(service.maxPerDay ? { capManaged: true as const } : {}),
     customer: { ...customer, timezone: input.timezone },
     manageTokenHash: tokenHash(token),
     calendar: availability.bookingCalendar,
@@ -361,67 +281,73 @@ export async function createBooking(
     updatedAt: new Date(),
   }
   const schedule = await getSchedule(business._id, String(service.scheduleId))
-  if (service.maxPerDay && schedule)
-    b.capacityKey = `${business._id}:${service._id}:${localDateOf(start, schedule.timezone)}`
+  if (!schedule) throw new ApiFailure('slot_taken')
   const col = await bookings()
   await col.insertOne(b)
-  let eventAttempted = false
   try {
-    await acquire(b, lockBlocks({ start, ...b.service }))
-    if (b.capacityKey)
-      await reserveCapacity(b.capacityKey, id, service.maxPerDay!)
+    await acquire(b, b.opId, start)
+    if (service.maxPerDay)
+      await reserveCapacity(
+        b,
+        b.opId,
+        start,
+        schedule.timezone,
+        service.maxPerDay,
+      )
+  } catch (error) {
+    await release(b.opId)
+    await col.deleteOne({ _id: id, rev: 0, status: 'pending' })
+    throw error
+  }
+  try {
+    if (Date.now() + 60_000 >= +b.expiresAt!)
+      throw new ApiFailure('calendar_unavailable')
     const c = availability.bookingCalendar
-    // Leave the entire bounded token + Google budget before the sweep deadline.
-    if (Date.now() + 60_000 >= +b.deadline!) throw new ApiFailure('slot_taken')
-    eventAttempted = true
     const created = await calendarCall(business, c.accountId, () =>
       calendarProvider({
         id: c.accountId,
         userId: business.ownerUserId,
       }).createEvent(c.calendarId, event(business, b, result.manageUrl)),
     )
-    const confirmed = await col.updateOne(
-      { _id: id, status: 'pending', deadline: { $gt: new Date() } },
+    const confirmed = await cas(
+      b,
       {
-        $set: {
-          status: 'confirmed',
-          googleEventId: created.id,
-          updatedAt: new Date(),
-        },
+        status: 'confirmed',
+        googleEventId: created.id,
+        ...(service.maxPerDay ? { capOpId: b.opId } : {}),
       },
+      {},
+      { status: 'pending', expiresAt: { $gt: new Date() } },
     )
-    if (confirmed.matchedCount !== 1 || Date.now() >= +b.deadline!)
-      throw new ApiFailure('slot_taken')
+    if (!confirmed) throw new ApiFailure('slot_taken')
     return result
-  } catch (e) {
-    if (eventAttempted) {
-      const c = availability.bookingCalendar
-      try {
-        await calendarCall(business, c.accountId, () =>
-          calendarProvider({
-            id: c.accountId,
-            userId: business.ownerUserId,
-          }).deleteEvent(c.calendarId, eventIdForBooking(String(id))),
-        )
-      } catch {
-        await col.updateOne(
-          { _id: id },
-          { $set: { status: 'recovery_required' } },
-        )
-        console.error('OpenSlots booking recovery required', String(id))
-        throw e
-      }
-    }
-    await (await getDb()).collection('slot_locks').deleteMany({ bookingId: id })
-    await releaseCapacity(b.capacityKey, id)
-    await col.deleteOne({ _id: id })
-    throw e
+  } catch (error) {
+    const current = await col.findOne({ _id: id })
+    if (current?.status === 'confirmed' && current.opId === b.opId)
+      return result
+    if (
+      await cas(b, {
+        status: 'cancelled',
+        abandoned: true,
+        cleanup: true,
+        purgeAfter: new Date(Date.now() + 3600000),
+      })
+    )
+      await reconcile(id)
+    // A lost confirmation may have landed in Google after another owner cleaned
+    // the tombstone. Delete again without touching another operation's locks.
+    else await deleteEvent(b, business).catch(() => {})
+    throw error
   }
 }
 export async function manageBooking(businessId: ObjectId, token: string) {
   const b = await (
     await bookings()
-  ).findOne({ businessId, manageTokenHash: tokenHash(token) })
+  ).findOne({
+    businessId,
+    manageTokenHash: tokenHash(token),
+    abandoned: { $ne: true },
+  })
   if (!b) throw new ApiFailure('not_found')
   return b
 }
@@ -446,155 +372,338 @@ export function summary(business: BusinessDoc, b: BookingDoc) {
     customer: { name: b.customer.name, email: b.customer.email },
   }
 }
-async function change(
-  business: BusinessDoc,
-  id: ObjectId,
-  start?: Date,
-  manageUrl?: string,
+
+async function cas(
+  b: BookingDoc,
+  set: Record<string, unknown>,
+  unset: Record<string, ''> = {},
+  extra = {},
 ) {
-  await guardLocks()
-  await maybeSweep()
-  const col = await bookings()
-  const b = await col.findOneAndUpdate(
+  const result = await (
+    await bookings()
+  ).updateOne(
+    { _id: b._id, rev: b.rev, ...extra },
     {
-      _id: id,
-      businessId: business._id,
-      status: 'confirmed',
-      start: { $gt: new Date() },
-      $or: [
-        { changing: { $ne: true } },
-        { changingAt: { $lt: new Date(Date.now() - ATTEMPT_MS) } },
-      ],
+      $set: { ...set, updatedAt: new Date() },
+      $inc: { rev: 1 },
+      ...(Object.keys(unset).length ? { $unset: unset } : {}),
     },
-    {
-      $set: {
-        changing: true,
-        changingAt: new Date(),
-        ...(start ? { changingTarget: start } : {}),
-      },
-    },
-    { returnDocument: 'after' },
   )
-  if (!b) throw new ApiFailure('booking_not_changeable')
-  const oldBlocks = lockBlocks({ start: b.start, ...b.service })
-  let added: number[] = []
-  let obsolete: number[] = []
-  let patchAttempted = false
-  let retain = false
-  let nextCapacityKey: string | undefined
+  return result.matchedCount === 1
+}
+async function deleteEvent(b: BookingDoc, business: BusinessDoc) {
+  if (!b.calendar) throw new ApiFailure('calendar_unavailable')
+  const c = b.calendar
   try {
-    const c = b.calendar
-    if (!c || !b.googleEventId) throw new ApiFailure('calendar_unavailable')
-    const provider = calendarProvider({
+    await calendarProvider({
       id: c.accountId,
       userId: business.ownerUserId,
-    })
-    if (!start) {
-      await calendarCall(business, c.accountId, () =>
-        provider.deleteEvent(c.calendarId, b.googleEventId!),
-      )
-      await (
-        await getDb()
-      )
-        .collection('slot_locks')
-        .deleteMany({ bookingId: id })
-      await releaseCapacity(b.capacityKey, id)
-      b.status = 'cancelled'
-    } else {
-      const service = await getService(business._id, String(b.serviceId))
-      if (!service?.active) throw new ApiFailure('booking_not_changeable')
-      if (+start < +b.end && +start + b.service.durationMin * 60000 > +b.start)
-        throw new ApiFailure(
-          'booking_not_changeable',
-          'Pick a time that does not overlap your current booking, or cancel and book again.',
-        )
-      await checkStart(business, String(b.serviceId), start, id, b.service)
-      const next = {
-        ...b,
-        start,
-        end: new Date(+start + b.service.durationMin * 60000),
-      }
-      const blocks = lockBlocks({ start, ...b.service })
-      added = blocks.filter((block) => !oldBlocks.includes(block))
-      await acquire(b, added)
-      const schedule = await getSchedule(
-        business._id,
-        String(service.scheduleId),
-      )
-      if (service.maxPerDay && schedule) {
-        const key = `${business._id}:${service._id}:${localDateOf(start, schedule.timezone)}`
-        if (key !== b.capacityKey) {
-          nextCapacityKey = key
-          await reserveCapacity(key, id, service.maxPerDay)
-        }
-      }
-      if (Date.now() + 60_000 >= +b.changingAt! + ATTEMPT_MS)
-        throw new ApiFailure('booking_not_changeable')
-      patchAttempted = true
-      await calendarCall(business, c.accountId, () =>
-        provider.updateEvent(c.calendarId, b.googleEventId!, {
-          ...event(business, next, manageUrl),
-          ...(!manageUrl ? { description: undefined } : {}),
-        }),
-      )
-      obsolete = oldBlocks.filter((block) => !blocks.includes(block))
-      b.rescheduledFrom = b.start
-      b.start = next.start
-      b.end = next.end
-    }
-    const moved = await col.updateOne(
-      { _id: id, businessId: business._id, changingAt: b.changingAt },
-      {
-        $set: {
-          ...(nextCapacityKey ? { capacityKey: nextCapacityKey } : {}),
-          status: b.status,
-          start: b.start,
-          end: b.end,
-          ...(b.rescheduledFrom ? { rescheduledFrom: b.rescheduledFrom } : {}),
-          updatedAt: new Date(),
-        },
-        $unset: { changingTarget: '' },
-      },
+    }).deleteEvent(
+      c.calendarId,
+      b.googleEventId ?? eventIdForBooking(String(b._id)),
     )
-    if (moved.matchedCount !== 1) throw new ApiFailure('booking_not_changeable')
-    if (nextCapacityKey) await releaseCapacity(b.capacityKey, id)
-    await (
-      await getDb()
-    )
-      .collection('slot_locks')
-      .deleteMany({ bookingId: id, block: { $in: obsolete } })
-    return b
   } catch (e) {
-    if (patchAttempted) {
-      // A failed response may follow a successful patch. Keep both intervals
-      // locked until an operator reconciles; never expose either time.
-      retain = true
-      await col.updateOne(
-        { _id: id },
-        { $set: { status: 'recovery_required' } },
-      )
-      console.error('OpenSlots booking recovery required', String(id))
-    }
-    if (!retain) await releaseCapacity(nextCapacityKey, id)
-    if (added.length && !retain)
-      await (
-        await getDb()
-      )
-        .collection('slot_locks')
-        .deleteMany({ bookingId: id, block: { $in: added } })
+    if (e instanceof CalendarError && [404, 410].includes(e.status)) return
     throw e
-  } finally {
-    await col.updateOne(
-      { _id: id, changingAt: b.changingAt },
-      { $unset: { changing: '', changingAt: '', changingTarget: '' } },
-    )
   }
 }
-export const cancelBooking = (business: BusinessDoc, id: ObjectId) =>
-  change(business, id)
-export const rescheduleBooking = (
+/** Revision lease prevents concurrent reconciles. A stale Google patch cannot be
+ * fenced: after losing its revision, it must never unlock or clear sync intent. */
+export async function reconcile(id: ObjectId) {
+  const col = await bookings()
+  let b = await col.findOne({ _id: id })
+  if (!b || (!b.cleanup && !b.eventSync)) return
+  if (b.syncAt && +b.syncAt > Date.now() - 120000) return
+  if (!(await cas(b, { syncAt: new Date() }))) return
+  b = (await col.findOne({ _id: id, rev: b.rev + 1 }))!
+  if (!b) return
+  const db = await getDb()
+  const business = await db
+    .collection<BusinessDoc>('businesses')
+    .findOne({ _id: b.businessId })
+  if (!business) return
+  try {
+    if (b.status === 'cancelled' && b.cleanup) {
+      await deleteEvent(b, business)
+      await db.collection('slot_locks').deleteMany({ bookingId: id })
+      await db.collection('cap_locks').deleteMany({ bookingId: id })
+      await cas(
+        b,
+        {},
+        {
+          cleanup: '',
+          syncAt: '',
+          eventSync: '',
+          prevOpId: '',
+          prevStart: '',
+          prevEnd: '',
+          prevCapOpId: '',
+        },
+      )
+    } else if (b.status === 'confirmed' && b.eventSync && b.calendar) {
+      const c = b.calendar
+      const provider = calendarProvider({
+        id: c.accountId,
+        userId: business.ownerUserId,
+      })
+      const { description: _description, ...payload } = event(business, b)
+      void _description
+      try {
+        await provider.updateEvent(
+          c.calendarId,
+          b.googleEventId ?? payload.id,
+          payload,
+        )
+      } catch (e) {
+        if (!(e instanceof CalendarError && e.status === 404)) throw e
+        if (!(await col.findOne({ _id: id, rev: b.rev, status: 'confirmed' })))
+          return
+        await provider.createEvent(c.calendarId, payload)
+      }
+      // Cancellation may have won while Google was in flight. Never unlock on
+      // a stale snapshot; leave reconciliation intent for its new owner.
+      if (!(await col.findOne({ _id: id, rev: b.rev, status: 'confirmed' })))
+        return
+      if (b.prevOpId)
+        await db.collection('slot_locks').deleteMany({ opId: b.prevOpId })
+      if (b.prevCapOpId)
+        await db.collection('cap_locks').deleteMany({ opId: b.prevCapOpId })
+      await cas(
+        b,
+        {},
+        {
+          eventSync: '',
+          prevOpId: '',
+          prevStart: '',
+          prevEnd: '',
+          prevCapOpId: '',
+          syncAt: '',
+        },
+      )
+    }
+  } catch (e) {
+    if (e instanceof CalendarAuthError)
+      await markNeedsReconnect(b.businessId, b.calendar!.accountId)
+    await cas(b, {}, { syncAt: '' })
+  }
+}
+export async function cancelBooking(business: BusinessDoc, id: ObjectId) {
+  const col = await bookings()
+  const b = await col.findOne({
+    _id: id,
+    businessId: business._id,
+    abandoned: { $ne: true },
+  })
+  if (!b) throw new ApiFailure('not_found')
+  if (b.status === 'cancelled') return b
+  if (b.status !== 'confirmed' || +b.start <= Date.now())
+    throw new ApiFailure('booking_not_changeable')
+  if (
+    !(await cas(
+      b,
+      {
+        status: 'cancelled',
+        cleanup: true,
+        purgeAfter: new Date(Date.now() + 3600000),
+      },
+      { pendingOp: '' },
+    ))
+  )
+    throw new ApiFailure('slot_taken')
+  await reconcile(id)
+  return (await col.findOne({ _id: id }))!
+}
+export async function rescheduleBooking(
   business: BusinessDoc,
   id: ObjectId,
   start: Date,
   manageUrl?: string,
-) => change(business, id, start, manageUrl)
+) {
+  void manageUrl
+  await guardLocks()
+  const col = await bookings()
+  const b = await col.findOne({
+    _id: id,
+    businessId: business._id,
+    abandoned: { $ne: true },
+  })
+  if (!b || b.status !== 'confirmed' || +b.start <= Date.now())
+    throw new ApiFailure('booking_not_changeable')
+  if (
+    b.eventSync ||
+    b.prevOpId ||
+    b.prevCapOpId ||
+    (b.pendingOp && +b.pendingOp.startedAt > Date.now() - 120000)
+  )
+    throw new ApiFailure('slot_taken', 'Try again in a moment.')
+  const old = occupiedInterval({ start: b.start, ...b.service })
+  const next = occupiedInterval({ start, ...b.service })
+  if (+next.start < +old.end && +next.end > +old.start)
+    throw new ApiFailure(
+      'booking_not_changeable',
+      'Pick a time that does not overlap your current booking, or cancel and book again.',
+    )
+  const service = await getService(business._id, String(b.serviceId))
+  if (!service?.active) throw new ApiFailure('booking_not_changeable')
+  const schedule = await getSchedule(business._id, String(service.scheduleId))
+  if (!schedule) throw new ApiFailure('slot_taken')
+  const opId = crypto.randomUUID()
+  if (!(await cas(b, { pendingOp: { opId, startedAt: new Date() } })))
+    throw new ApiFailure('slot_taken')
+  const claimed = { ...b, rev: b.rev + 1 }
+  const changesDate =
+    localDateOf(start, schedule.timezone) !==
+    localDateOf(b.start, schedule.timezone)
+  const takeCap = changesDate && !!service.maxPerDay
+  try {
+    await checkStart(business, String(b.serviceId), start, id, b.service)
+    await acquire(b, opId, start)
+    if (takeCap)
+      await reserveCapacity(
+        b,
+        opId,
+        start,
+        schedule.timezone,
+        service.maxPerDay!,
+      )
+    if (
+      !(await cas(
+        claimed,
+        {
+          start,
+          end: new Date(+start + b.service.durationMin * 60000),
+          opId,
+          prevOpId: b.opId,
+          prevStart: b.start,
+          prevEnd: b.end,
+          rescheduledFrom: b.start,
+          eventSync: true,
+          ...(takeCap
+            ? {
+                capManaged: true,
+                capOpId: opId,
+                ...(b.capOpId ? { prevCapOpId: b.capOpId } : {}),
+              }
+            : {}),
+        },
+        { pendingOp: '' },
+      ))
+    )
+      throw new ApiFailure('slot_taken')
+  } catch (e) {
+    const current = await col.findOne({ _id: id })
+    if (current?.opId !== opId) {
+      await cas(claimed, {}, { pendingOp: '' })
+      await release(opId)
+    }
+    // An ambiguous acknowledgement can follow a committed write. Retain its
+    // locks and durable sync intent; a sweep will finish it.
+    throw e
+  }
+  await reconcile(id)
+  const current = await col.findOne({ _id: id })
+  if (current?.status !== 'confirmed' || current.opId !== opId)
+    throw new ApiFailure('slot_taken')
+  return current
+}
+const sweepOffsets: Record<string, number> = {}
+let nextSweepAt = 0
+export async function maybeSweep() {
+  if (Date.now() < nextSweepAt) return
+  nextSweepAt = Date.now() + 30000
+  await sweepAbandoned()
+}
+export async function sweepAbandoned() {
+  const col = await bookings(),
+    db = await getDb(),
+    now = new Date()
+  const batch = 50
+  for (const b of await col
+    .find({ status: 'pending', expiresAt: { $lte: now } })
+    .limit(batch)
+    .toArray()) {
+    if (
+      await cas(b, {
+        status: 'cancelled',
+        abandoned: true,
+        cleanup: true,
+        purgeAfter: new Date(+now + 3600000),
+      })
+    )
+      await reconcile(b._id)
+  }
+  for (const b of await col
+    .find({ $or: [{ cleanup: true }, { eventSync: true }] })
+    .limit(batch)
+    .toArray())
+    await reconcile(b._id)
+  for (const b of await col
+    .find({ 'pendingOp.startedAt': { $lt: new Date(+now - 300000) } })
+    .limit(batch)
+    .toArray())
+    await cas(b, {}, { pendingOp: '' })
+  for (const b of await col
+    .find({
+      purgeAfter: { $lte: now },
+      status: 'cancelled',
+      cleanup: { $ne: true },
+    })
+    .limit(batch)
+    .toArray()) {
+    const business = await db
+      .collection<BusinessDoc>('businesses')
+      .findOne({ _id: b.businessId })
+    if (!business) continue
+    try {
+      await deleteEvent(b, business)
+      if (b.abandoned) await col.deleteOne({ _id: b._id, rev: b.rev })
+      else await cas(b, {}, { purgeAfter: '' })
+    } catch (e) {
+      if (e instanceof CalendarAuthError)
+        await markNeedsReconnect(b.businessId, b.calendar!.accountId)
+    }
+  }
+  for (const name of ['slot_locks', 'cap_locks']) {
+    const locks = await db
+      .collection<{ bookingId: ObjectId; opId: string; createdAt: Date }>(name)
+      .find({ createdAt: { $lt: new Date(+now - 600000) } })
+      .skip(sweepOffsets[name] ?? 0)
+      .limit(batch)
+      .toArray()
+    sweepOffsets[name] =
+      locks.length === batch ? (sweepOffsets[name] ?? 0) + batch : 0
+    for (const lock of locks) {
+      const b = await col.findOne({ _id: lock.bookingId })
+      if (
+        !b ||
+        (b.status === 'cancelled' && !b.cleanup) ||
+        ((b.status === 'pending' || b.status === 'confirmed') &&
+          ![
+            b.opId,
+            b.prevOpId,
+            b.capOpId,
+            b.prevCapOpId,
+            b.pendingOp?.opId,
+          ].includes(lock.opId))
+      )
+        await db.collection(name).deleteOne({ _id: lock._id, opId: lock.opId })
+    }
+    const ended = await col
+      .find({
+        status: 'confirmed',
+        end: { $lt: new Date(+now - 86400000) },
+        eventSync: { $ne: true },
+        pendingOp: { $exists: false },
+      })
+      .skip(sweepOffsets[name + ':ended'] ?? 0)
+      .limit(batch)
+      .toArray()
+    sweepOffsets[name + ':ended'] =
+      ended.length === batch ? (sweepOffsets[name + ':ended'] ?? 0) + batch : 0
+    for (const b of ended)
+      await db.collection(name).deleteMany({
+        bookingId: b._id,
+        opId: { $in: [b.opId, b.capOpId].filter(Boolean) },
+      })
+  }
+}

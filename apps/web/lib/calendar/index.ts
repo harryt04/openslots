@@ -61,6 +61,7 @@ export function calendarProvider(account: {
     }
   }
   return new GoogleCalendarProvider(async () => {
+    const deadline = Date.now() + 15_000
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         let timer: ReturnType<typeof setTimeout> | undefined
@@ -69,7 +70,10 @@ export function calendarProvider(account: {
             body: { accountId: account.id, userId: account.userId },
           }),
           new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new CalendarError(503)), 15_000)
+            timer = setTimeout(
+              () => reject(new CalendarError(503)),
+              Math.max(0, deadline - Date.now()),
+            )
           }),
         ]).finally(() => clearTimeout(timer))
         if (

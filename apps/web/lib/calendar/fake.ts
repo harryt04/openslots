@@ -1,12 +1,14 @@
 import 'server-only'
 import {
   CalendarAuthError,
+  CalendarError,
   type Calendar,
   type CalendarEvent,
   type CalendarProvider,
   type Interval,
 } from './types'
 export type FakeState = {
+  pause?: (kind: 'create' | 'update' | 'delete') => Promise<void>
   calendars: Calendar[]
   busy: Record<string, Interval[]>
   authFailure: boolean
@@ -42,7 +44,8 @@ export function seedFakeCalendar(
     authFailure: false,
     events: {},
     operations: [],
-    ...structuredClone(seed),
+    ...structuredClone({ ...seed, pause: undefined }),
+    pause: seed.pause,
   }
   states.set(accountId, state)
   return state
@@ -83,6 +86,7 @@ export class FakeCalendarProvider implements CalendarProvider {
   async createEvent(calendarId: string, event: CalendarEvent) {
     const state = this.state(),
       id = event.id ?? crypto.randomUUID()
+    await state.pause?.('create')
     if (state.events[id]) return { id }
     state.events[id] = { calendarId, event: structuredClone(event) }
     state.operations.push({
@@ -95,6 +99,8 @@ export class FakeCalendarProvider implements CalendarProvider {
   }
   async updateEvent(calendarId: string, eventId: string, event: CalendarEvent) {
     const state = this.state()
+    await state.pause?.('update')
+    if (!state.events[eventId]) throw new CalendarError(404)
     state.events[eventId] = {
       calendarId,
       event: {
@@ -115,6 +121,7 @@ export class FakeCalendarProvider implements CalendarProvider {
   }
   async deleteEvent(calendarId: string, eventId: string) {
     const state = this.state()
+    await state.pause?.('delete')
     delete state.events[eventId]
     state.operations.push({ kind: 'delete', calendarId, eventId })
   }

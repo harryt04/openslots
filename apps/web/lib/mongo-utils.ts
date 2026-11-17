@@ -39,9 +39,21 @@ export const indexes: Record<CollectionName, IndexDescription[]> = {
       unique: true,
     },
   ],
-  booking_day_counts: [{ key: { _id: 1 }, name: '_id_' }],
+  cap_locks: [
+    { key: { businessId: 1, capKey: 1 }, unique: true },
+    { key: { opId: 1 } },
+    { key: { bookingId: 1 } },
+    { key: { createdAt: 1 } },
+  ],
   bookings: [
-    { key: { status: 1, deadline: 1 }, name: 'attempt_deadline' },
+    { key: { status: 1, expiresAt: 1 } },
+    { key: { cleanup: 1 } },
+    { key: { eventSync: 1 } },
+    { key: { 'pendingOp.startedAt': 1 } },
+    { key: { purgeAfter: 1 } },
+    { key: { status: 1, end: 1 } },
+    { key: { businessId: 1, prevStart: 1, prevEnd: 1 } },
+    { key: { businessId: 1, serviceId: 1, status: 1, capManaged: 1 } },
     { key: { businessId: 1, start: 1 }, name: 'businessId_start' },
     {
       key: { manageTokenHash: 1 },
@@ -64,6 +76,8 @@ export const indexes: Record<CollectionName, IndexDescription[]> = {
       unique: true,
     },
     { key: { bookingId: 1 }, name: 'bookingId' },
+    { key: { opId: 1 } },
+    { key: { createdAt: 1 } },
   ],
 }
 

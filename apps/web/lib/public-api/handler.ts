@@ -1,3 +1,4 @@
+import { after } from 'next/server'
 import { z } from 'zod'
 import {
   publishableKeySchema,
@@ -14,6 +15,7 @@ import { getDb } from '../mongo-client'
 import type { BusinessDoc } from '../businesses/repository'
 import { listServices } from '../services/repository'
 import {
+  maybeSweep,
   availableSlots,
   createBooking,
   manageBooking,
@@ -33,6 +35,11 @@ export async function handle(
   route: 'business' | 'slots' | 'bookings' | 'manage' | 'cancel' | 'reschedule',
   token?: string,
 ) {
+  after(() =>
+    maybeSweep().catch(() => {
+      console.error('OpenSlots sweep failed')
+    }),
+  )
   const headers = new Headers({ Vary: 'Origin', 'Cache-Control': 'no-store' })
   try {
     const db = await getDb()
