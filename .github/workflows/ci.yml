@@ -84,7 +84,8 @@ jobs:
           test "$(docker compose exec -T app id -u)" != "0"
       - name: Fake mode is refused in production
         run: |
-          set -u
+          # Not `set -e`: the container is expected to exit with an error.
+          set +e -u
           # The server must exit by itself with the refusal message. `timeout`
           # turns a server that starts anyway into a failure.
           timeout 60 docker run --rm -e E2E_FAKE_GOOGLE=1 \
@@ -93,7 +94,9 @@ jobs:
             openslots:local > /tmp/fake.log 2>&1
           status=$?
           tail -20 /tmp/fake.log
-          test "$status" -ne 0 && test "$status" -ne 124
+          if [ "$status" -eq 0 ] || [ "$status" -eq 124 ]; then
+            echo "The server started in fake mode in production (exit $status)"; exit 1
+          fi
           grep -q "must not be set" /tmp/fake.log
       - name: Logs on failure
         if: failure()
