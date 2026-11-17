@@ -211,7 +211,9 @@ const TRD_INDEXES: Record<
   services: [{ key: { businessId: 1, slug: 1 }, unique: true }],
   schedules: [{ key: { businessId: 1 }, unique: false }],
   calendar_links: [{ key: { businessId: 1, accountId: 1 }, unique: true }],
+  booking_day_counts: [],
   bookings: [
+    { key: { status: 1, deadline: 1 }, unique: false },
     { key: { businessId: 1, start: 1 }, unique: false },
     { key: { manageTokenHash: 1 }, unique: true },
     { key: { businessId: 1, status: 1, start: 1 }, unique: false },

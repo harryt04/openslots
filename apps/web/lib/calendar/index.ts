@@ -63,9 +63,15 @@ export function calendarProvider(account: {
   return new GoogleCalendarProvider(async () => {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const result = await auth.api.getAccessToken({
-          body: { accountId: account.id, userId: account.userId },
-        })
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const result = await Promise.race([
+          auth.api.getAccessToken({
+            body: { accountId: account.id, userId: account.userId },
+          }),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new CalendarError(503)), 15_000)
+          }),
+        ]).finally(() => clearTimeout(timer))
         if (
           !result.accessToken ||
           REQUIRED_SCOPES.some((scope) => !result.scopes.includes(scope))

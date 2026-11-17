@@ -1,4 +1,5 @@
 'use client'
+import { Info } from 'lucide-react'
 import { useState, useTransition } from 'react'
 import {
   AlertDialog,
@@ -24,12 +25,23 @@ export function Settings({
 }) {
   const [origin, setOrigin] = useState('')
   const [message, setMessage] = useState('')
+  const [messageAt, setMessageAt] = useState<'key' | 'origin' | 'snippet'>(
+    'key',
+  )
+  const status = (at: typeof messageAt) =>
+    message && messageAt === at ? (
+      <p role="status" className="flex items-start gap-2 text-sm">
+        <Info className="size-4 shrink-0" aria-hidden="true" />
+        {message}
+      </p>
+    ) : null
   const [confirm, setConfirm] = useState(false)
   const [pending, start] = useTransition()
   function save(action: 'rotate' | 'add' | 'remove', value = '') {
     start(async () => {
       const result = await updateDeveloperSettings(action, value)
-      setMessage(result.error || 'Saved')
+      setMessageAt(action === 'rotate' ? 'key' : 'origin')
+      setMessage(result.error || result.message || 'Saved')
       if (!result.error) {
         setConfirm(false)
         setOrigin('')
@@ -38,14 +50,14 @@ export function Settings({
   }
   const snippet = `import { BookingFlow } from '@openslots/react'\nimport '@openslots/react/styles.css'\n\nexport default function Book() {\n  return <BookingFlow\n  host="${host}"\n  publishableKey="${publishableKey}"\n  />\n}`
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
-      <div className="space-y-6">
-        <section className="space-y-4 rounded-xl border bg-card p-6">
+    <div className="grid min-w-0 gap-6 lg:grid-cols-2">
+      <div className="min-w-0 space-y-6">
+        <section className="min-w-0 space-y-4 rounded-xl border bg-card p-6">
           <h2 className="font-semibold">Publishable key</h2>
           <div className="flex gap-2">
             <Input
               aria-label="Publishable key"
-              className="font-mono"
+              className="min-w-0 font-mono"
               readOnly
               value={publishableKey}
             />
@@ -53,6 +65,7 @@ export function Settings({
               variant="outline"
               onClick={async () => {
                 await navigator.clipboard.writeText(publishableKey)
+                setMessageAt('key')
                 setMessage('Key copied')
               }}
             >
@@ -65,6 +78,7 @@ export function Settings({
           <Button variant="outline" onClick={() => setConfirm(true)}>
             Rotate key
           </Button>
+          {status('key')}
           <AlertDialog open={confirm} onOpenChange={setConfirm}>
             <AlertDialogContent>
               <AlertDialogHeader>
@@ -83,7 +97,7 @@ export function Settings({
             </AlertDialogContent>
           </AlertDialog>
         </section>
-        <section className="space-y-4 rounded-xl border bg-card p-6">
+        <section className="min-w-0 space-y-4 rounded-xl border bg-card p-6">
           <h2 className="font-semibold">Allowed sites</h2>
           <p className="text-sm text-muted-foreground">
             This install is always allowed. Add each site that embeds your
@@ -122,29 +136,29 @@ export function Settings({
             />
             <Button disabled={pending}>Add site</Button>
           </form>
+          {status('origin')}
         </section>
       </div>
-      <section className="space-y-4 rounded-xl border bg-card p-6">
+      <section className="min-w-0 space-y-4 rounded-xl border bg-card p-6">
         <h2 className="font-semibold">Install and embed</h2>
-        <pre className="overflow-auto rounded-lg bg-code p-4 font-mono text-sm text-code-foreground">
+        <pre className="max-w-full overflow-auto rounded-lg bg-code p-4 font-mono text-sm text-code-foreground">
           pnpm add @openslots/react
         </pre>
-        <pre className="overflow-auto rounded-lg bg-code p-4 font-mono text-sm text-code-foreground">
+        <pre className="max-w-full overflow-auto rounded-lg bg-code p-4 font-mono text-sm text-code-foreground">
           <code>{snippet}</code>
         </pre>
         <Button
           variant="outline"
           onClick={async () => {
             await navigator.clipboard.writeText(snippet)
+            setMessageAt('snippet')
             setMessage('Snippet copied')
           }}
         >
           Copy snippet
         </Button>
+        {status('snippet')}
       </section>
-      <p role="status" className="text-sm">
-        {message}
-      </p>
     </div>
   )
 }

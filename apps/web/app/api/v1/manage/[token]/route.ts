@@ -9,3 +9,13 @@ export async function GET(
 export async function OPTIONS(request: Request) {
   return handle(request, 'manage')
 }
+
+export const POST = GET
+
+export const PUT = GET
+
+export const PATCH = GET
+
+export const DELETE = GET
+
+export const HEAD = GET

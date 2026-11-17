@@ -38,32 +38,18 @@ export async function handle(
     const db = await getDb()
     const origin = request.headers.get('origin')
     const host = new URL(process.env.BETTER_AUTH_URL!).origin
-    // Preflight cannot carry the key: authorize only the instance origin or a
-    // registered origin, then validate the key again on the actual request.
+    // Preflights are uniform and reveal no business origin registrations.
+    // The actual request is checked against the key's own business below.
     if (request.method === 'OPTIONS') {
-      const allowed =
-        origin &&
-        (origin === host ||
-          (await db
-            .collection<BusinessDoc>('businesses')
-            .findOne({ allowedOrigins: origin })))
-      if (!allowed) throw new ApiFailure('origin_not_allowed')
-      headers.set('Access-Control-Allow-Origin', origin!)
+      if (origin) headers.set('Access-Control-Allow-Origin', origin)
       headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
       headers.set(
         'Access-Control-Allow-Headers',
         'Content-Type, X-OpenSlots-Key',
       )
+      headers.set('Access-Control-Max-Age', '600')
       return new Response(null, { status: 204, headers })
     }
-    if (
-      origin &&
-      (origin === host ||
-        (await db
-          .collection<BusinessDoc>('businesses')
-          .findOne({ allowedOrigins: origin })))
-    )
-      headers.set('Access-Control-Allow-Origin', origin)
     const key = request.headers.get('X-OpenSlots-Key')
     if (!publishableKeySchema.safeParse(key).success)
       throw new ApiFailure('invalid_key')
@@ -80,19 +66,40 @@ export async function handle(
       throw new ApiFailure('origin_not_allowed')
     }
     if (origin) headers.set('Access-Control-Allow-Origin', origin)
+    headers.set('Access-Control-Expose-Headers', 'Retry-After')
     if (route === 'slots' || request.method === 'POST') {
-      // No proxy headers are trusted unless the operator explicitly enables it.
+      const hops = Number(process.env.TRUSTED_PROXY_HOPS ?? 0)
+      const forwarded =
+        request.headers
+          .get('x-forwarded-for')
+          ?.split(',')
+          .map((s) => s.trim()) ?? []
       const ip =
-        process.env.TRUST_PROXY_IP === '1'
-          ? (request.headers
-              .get('x-forwarded-for')
-              ?.split(',')[0]
-              ?.trim()
-              .slice(0, 100) ?? 'unknown')
-          : 'unknown'
+        Number.isInteger(hops) && hops > 0 ? forwarded.at(-hops) : undefined
       const minute = Math.floor(Date.now() / 60000)
-      const limit = request.method === 'POST' ? 30 : 60
-      for (const scope of [`key:${business._id}`, `ip:${ip}`]) {
+      const write = request.method === 'POST'
+      const configuredLimit = (name: string, fallback: number) => {
+        const n = Number(process.env[name])
+        return Number.isInteger(n) && n > 0 ? n : fallback
+      }
+      const scopes: [string, number][] = [
+        [
+          `key:${business._id}`,
+          configuredLimit(
+            write ? 'API_WRITE_KEY_LIMIT' : 'API_SLOTS_KEY_LIMIT',
+            write ? 100 : 600,
+          ),
+        ],
+      ]
+      if (ip)
+        scopes.push([
+          `ip:${ip.slice(0, 100)}`,
+          configuredLimit(
+            write ? 'API_WRITE_IP_LIMIT' : 'API_SLOTS_IP_LIMIT',
+            write ? 10 : 60,
+          ),
+        ])
+      for (const [scope, limit] of scopes) {
         const id = tokenHash(`${scope}:${request.method}:${minute}`)
         const counter = await db
           .collection<{ _id: string; count: number; expiresAt: Date }>(
@@ -115,13 +122,35 @@ export async function handle(
         }
       }
     }
+    const expectedMethod = ['business', 'slots', 'manage'].includes(route)
+      ? 'GET'
+      : 'POST'
+    if (request.method !== expectedMethod) {
+      headers.set('Allow', expectedMethod + ', OPTIONS')
+      return Response.json(
+        { error: { code: 'invalid_request', message: 'Method not allowed' } },
+        { status: 405, headers },
+      )
+    }
+    const outgoing = <T>(schema: z.ZodType<T>, value: unknown): T => {
+      const result = schema.safeParse(value)
+      if (!result.success) {
+        console.error(
+          'OpenSlots response validation failed',
+          route,
+          result.error.issues.map((i) => i.path.join('.')),
+        )
+        throw new ApiFailure('internal_error')
+      }
+      return result.data
+    }
     let response: Response
     if (route === 'business') {
       const services = (await listServices(business._id))
         .filter((s) => s.active)
         .map((s) => ({ ...s, id: String(s._id) }))
       response = Response.json(
-        parse(businessResponseSchema, {
+        outgoing(businessResponseSchema, {
           name: business.name,
           slug: business.slug,
           timezone: business.timezone,
@@ -136,7 +165,7 @@ export async function handle(
         Object.fromEntries(new URL(request.url).searchParams),
       )
       response = Response.json(
-        parse(
+        outgoing(
           slotsResponseSchema,
           await availableSlots(
             business,
@@ -152,7 +181,7 @@ export async function handle(
         await request.json().catch(() => null),
       )
       response = Response.json(
-        parse(
+        outgoing(
           createBookingResponseSchema,
           await createBooking(business, input, host),
         ),
@@ -177,7 +206,7 @@ export async function handle(
         )
       }
       response = Response.json(
-        parse(manageSummarySchema, summary(business, booking)),
+        outgoing(manageSummarySchema, summary(business, booking)),
       )
     }
     headers.forEach((value, key) => response.headers.set(key, value))

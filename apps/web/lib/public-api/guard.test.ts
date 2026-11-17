@@ -16,6 +16,16 @@ it('refuses booking writes without the unique slot lock index and logs a clear d
     await expect(guardLocks()).rejects.toMatchObject({ code: 'internal_error' })
     expect(log).toHaveBeenCalledTimes(1)
     expect(log.mock.calls[0]?.[0]).toContain('slot_locks')
+    const db = await client.getDb()
+    await db
+      .collection('slot_locks')
+      .createIndex({ businessId: 1, block: 1 }, { unique: true })
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000)
+    try {
+      await expect(guardLocks()).resolves.toBeUndefined()
+    } finally {
+      clock.mockRestore()
+    }
   } finally {
     log.mockRestore()
     await client.closeMongoClient()

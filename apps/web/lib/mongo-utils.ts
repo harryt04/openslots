@@ -39,7 +39,9 @@ export const indexes: Record<CollectionName, IndexDescription[]> = {
       unique: true,
     },
   ],
+  booking_day_counts: [{ key: { _id: 1 }, name: '_id_' }],
   bookings: [
+    { key: { status: 1, deadline: 1 }, name: 'attempt_deadline' },
     { key: { businessId: 1, start: 1 }, name: 'businessId_start' },
     {
       key: { manageTokenHash: 1 },

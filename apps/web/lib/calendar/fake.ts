@@ -95,7 +95,17 @@ export class FakeCalendarProvider implements CalendarProvider {
   }
   async updateEvent(calendarId: string, eventId: string, event: CalendarEvent) {
     const state = this.state()
-    state.events[eventId] = { calendarId, event: structuredClone(event) }
+    state.events[eventId] = {
+      calendarId,
+      event: {
+        ...state.events[eventId]?.event,
+        ...structuredClone(event),
+        ...(event.description === undefined &&
+        state.events[eventId]?.event.description !== undefined
+          ? { description: state.events[eventId]!.event.description }
+          : {}),
+      },
+    }
     state.operations.push({
       kind: 'update',
       calendarId,

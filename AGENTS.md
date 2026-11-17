@@ -83,4 +83,4 @@ shared admin cancel/reschedule functions live in `lib/bookings/service.ts`.
 Admin callers pass the business returned by `requireBusiness()`. Read functions
 in `lib/bookings/repository.ts` always require a business id. Never subtract a
 booking's own interval from Google free/busy: that could hide another event.
-The unresolved overlapping-reschedule provider limitation is recorded in TRD.
+The deliberate v1 restriction on overlapping reschedules is recorded in TRD section 5.

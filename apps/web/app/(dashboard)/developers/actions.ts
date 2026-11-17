@@ -3,14 +3,15 @@ import { revalidatePath } from 'next/cache'
 import { requireBusiness } from '@/lib/businesses/current'
 import { generatePublishableKey } from '@/lib/businesses/keys'
 import { getDb } from '@/lib/mongo-client'
-import { validOrigin } from '@/lib/public-api/security'
+import { normalizeOrigin } from '@/lib/public-api/security'
 
 export async function updateDeveloperSettings(
   action: 'rotate' | 'add' | 'remove',
   origin = '',
 ) {
   const { business, session } = await requireBusiness()
-  if (action !== 'rotate' && !validOrigin(origin))
+  const normalized = normalizeOrigin(origin)
+  if (action !== 'rotate' && !normalized)
     return {
       error:
         'Enter an origin with scheme and host, no path. Use HTTPS (HTTP is allowed only for localhost).',
@@ -23,14 +24,22 @@ export async function updateDeveloperSettings(
     })
   if (action === 'add')
     await col.updateOne(filter, {
-      $addToSet: { allowedOrigins: origin },
+      $addToSet: { allowedOrigins: normalized },
       $set: { updatedAt: new Date() },
     })
   if (action === 'remove')
     await col.updateOne(filter, {
-      $pull: { allowedOrigins: origin } as never,
+      $pull: { allowedOrigins: normalized } as never,
       $set: { updatedAt: new Date() },
     })
   revalidatePath('/developers')
-  return { error: '' }
+  return {
+    error: '',
+    message:
+      action === 'add'
+        ? `Stored ${normalized}`
+        : action === 'rotate'
+          ? 'Key rotated'
+          : 'Site removed',
+  }
 }

@@ -43,7 +43,7 @@ The app consumes the workspace packages as TypeScript source (`transpilePackages
 
 ## 3. Data model
 
-Collections belong to the app database. Every document except Better Auth's has `createdAt` and `updatedAt`. IDs are `ObjectId` unless stated.
+Collections belong to the app database. Every document except Better Auth's and the derived `booking_day_counts` counters has `createdAt` and `updatedAt`. IDs are `ObjectId` unless stated.
 
 | Collection | Fields | Indexes |
 | --- | --- | --- |
@@ -53,7 +53,8 @@ Collections belong to the app database. Every document except Better Auth's has 
 | `schedules` | `businessId`, `name`, `timezone`, `weekly` (7 entries, each a list of `{startMin, endMin}`), `overrides[]` `{date: 'YYYY-MM-DD', ranges[]}` (empty ranges means closed) | `businessId` |
 | `calendar_links` | `businessId`, `accountId` (Better Auth account), `email`, `calendars[]` `{calendarId, name, blocks, writable}`, `status` (`ok` or `needs_reconnect`), `lastCheckedAt`, `needsReconnectSince?` (first auth failure, cleared on successful refresh) | unique `{businessId, accountId}` |
 | `calendar_link_returns` | `nonce`, `userId`, `businessId`, `accountId?` (reconnect intent; absent for link), `snapshot[]` (owned account ids), `expiresAt`, timestamps; consumed once by the authenticated return handler | unique `nonce`; TTL `expiresAt` (0 seconds) |
-| `bookings` | `businessId`, `serviceId`, service snapshot (`name`, `durationMin`, buffers), `start`, `end`, `status` (`pending`, `confirmed`, `cancelled`), `customer` `{name, email, phone?, notes?, timezone}`, `googleEventId?`, `manageTokenHash`, `rescheduledFrom?`, `origin?` | `{businessId, start}`; unique `manageTokenHash`; `{businessId, status, start}` |
+| `bookings` | `businessId`, `serviceId`, service snapshot (`name`, `durationMin`, buffers), `start`, `end`, `status` (`pending`, `confirmed`, `cancelled`, `abandoned`, `recovery_required`), `deadline`, `changingAt?`, `changingTarget?`, `capacityKey?`, `customer` `{name, email, phone?, notes?, timezone}`, `googleEventId?`, `manageTokenHash`, `rescheduledFrom?`, `origin?` | `{businessId, start}`; unique `manageTokenHash`; `{businessId, status, start}`; `{status, deadline}` |
+| `booking_day_counts` | deterministic string `_id` from business, service and schedule-local date; `count`, `bookings[]` (idempotent reservation ownership) | unique `_id` |
 | `slot_locks` | `businessId`, `block` (integer: UTC epoch minutes ÷ 5), `bookingId` | **unique `{businessId, block}`**; `bookingId` |
 
 `schedules.weekly[0]` is Sunday (as `Date.getDay()`); a new business gets one schedule, Monday to Friday 09:00 to 17:00 in its timezone. Publishable keys are `os_pk_` plus 24 random bytes, base64url. Business slugs are global, 3 to 40 characters of `a-z0-9-`, and a reserved list of app routes is refused. Service slugs are unique only within their business, may be shorter, and have no reserved list. Admin code reaches businesses only through `requireBusiness()` in `apps/web/lib/businesses/current.ts`, which re-validates the remembered business (cookie `openslots_business`) against `ownerUserId` on every call. Creating a business and switching to one use the session and the owner-scoped repository directly. Schedules are reached only through `apps/web/lib/schedules/repository.ts`, which takes the business id from `requireBusiness()`, validates with `scheduleSchema` from `@openslots/core`, refuses to delete a business's last schedule, and refuses to delete one that a service (`services.scheduleId`, ObjectId or hex string) uses. Without transactions the last-schedule rule is re-checked after the delete and the document is put back if none remain. The in-use check and the delete are separate operations, so a service created at that instant can be left pointing at a missing schedule; anything that loads a service's schedule must treat a missing one as no availability and must never fall back to another schedule. Saving a schedule replaces it whole with no revision check: with two stale tabs the last save wins. Date overrides are labelled Closed, Extra day (the weekday is normally closed), Short day (less time, within the usual opening and closing), Usual hours (exactly the usual times) or Changed hours (anything else). Creating a business writes two documents without a transaction: if the schedule write fails, the business is deleted again. A service's slug is derived from its name when it is created (`cut-and-style`, then `cut-and-style-2`, …), unique per business through the `{businessId, slug}` index (a duplicate-key error moves to the next candidate), and kept when the service is renamed so shared links keep working. Admin service queries live in `apps/web/lib/services/repository.ts` and all take the business id from `requireBusiness()`.
@@ -101,10 +102,18 @@ MongoDB runs without transactions, so correctness rests on the unique index on `
 4. Insert one `slot_locks` document for every 5 minute block in `[start − bufferBefore, start + duration + bufferAfter)` with `insertMany(..., { ordered: false })`.
 5. On any duplicate-key error: delete this booking's locks and the booking; respond `409 slot_taken`.
 6. Create the Google Calendar event on the business's booking calendar with the customer as attendee and `sendUpdates: 'all'`.
-7. On Google failure: delete locks and booking; respond `502 calendar_unavailable`. If the failure is an auth failure, set the link's status to `needs_reconnect`.
-8. Set `status: 'confirmed'` and store `googleEventId`. Respond `201`.
+7. On Google failure, delete the deterministic event id before releasing locks, capacity and the booking. If deletion fails, retain locks and mark `recovery_required`; log only the booking id for operator reconciliation. Auth failures mark the link `needs_reconnect`.
+8. Confirm only if exactly one pending document matches and its stored deadline is still in the future. Otherwise delete the deterministic event and clean up, returning `409 slot_taken`.
 
-Cancel: delete the Google event, delete the booking's locks, set `cancelled`. Reschedule: run steps 2 to 5 for the new time under the same booking ID with new locks, patch the Google event, then remove the old locks. Pending bookings older than two minutes are abandoned attempts: a sweep on each write path removes them and their locks.
+Pending attempts store a 180-second deadline. Each token fetch is bounded to 15 seconds (up to two attempts); each Google HTTP operation is bounded to 15 seconds. The event creation budget is therefore at most 45 seconds, well below the deadline. Token timeouts are transient errors, never reconnect errors.
+
+Daily caps reserve an atomic conditional increment in `booking_day_counts` after locks, per business/service/schedule-local date. Reservation ids make release idempotent. Release on failure and cancel; reserve the new date before rescheduling and release the old date after the document moves. Ambiguous operations retain capacity in the safe direction.
+
+Cancel deletes the event and releases locks/capacity. Reschedule acquires new locks and capacity, patches the event, moves the booking document, then deletes old locks and releases old capacity. An ambiguous patch retains both intervals and marks `recovery_required` for operator reconciliation. Changes store `changingAt`; a claim older than 180 seconds can be taken over.
+
+Sweeps are throttled per process to once per 30 seconds, with an indexed status/deadline query. They atomically claim expired pending attempts as `abandoned`, delete their deterministic calendar event (if any), delete their locks and capacity, then delete the booking. A failed event deletion retains the attempt as recovery_required. Sweeps resume abandoned cleanup. A stale-lock pass removes orphan locks and confirmed bookings' surplus locks, while preserving pending, changing and recovery-required attempts. Extra locks after a crash are safe until collected.
+
+Overlapping reschedules fail closed for v1: free/busy has no event identity and subtracting the booking's interval could hide another event. Manage endpoints return `booking_not_changeable` with guidance to choose a nonoverlapping time or cancel and book again. No event details are read.
 
 Because all service durations and intervals are multiples of 5 minutes, block alignment is exact. A required test fires at least 20 concurrent requests for overlapping times and asserts exactly one `201`.
 
@@ -169,7 +178,7 @@ Admin actions (S2 to S7) use Next.js server actions or route handlers behind the
 - Secrets only in environment variables. `.env.example` documents each one.
 - OAuth tokens encrypted at rest; never logged; never sent to the browser.
 - The publishable key grants only: read business, read slots, create a booking, and manage a booking with its token.
-- Manage tokens are single-booking, unguessable, stored hashed.
+- Manage tokens are single-booking, unguessable, stored hashed. The manage link is in the calendar event description: anyone the owner shares that calendar with at "see all event details" can use it.
 - `OPENSLOTS_ALLOWED_EMAILS` (comma-separated, optional) restricts who may sign in to an instance. It is checked at sign-in/linking only; removing an email does not terminate existing sessions. Google emails must be verified. When unset, any Google account may sign in; the self-host guide says so plainly.
 - Customer data held: name, email, optional phone and notes. No tracking of customers; PostHog is off by default and never loaded on booking pages or by the npm package.
 - Standard headers: CSP on app pages, `frame-ancestors` relaxed only for booking pages.
@@ -183,7 +192,9 @@ Admin actions (S2 to S7) use Next.js server actions or route handlers behind the
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | yes | Sign-in and calendar access |
 | `OPENSLOTS_ALLOWED_EMAILS` | no | Sign-in allowlist |
 | `NEXT_PUBLIC_POSTHOG_KEY`, `NEXT_PUBLIC_POSTHOG_HOST` | no | Analytics |
-| `TRUST_PROXY_IP` | no | Default `0`. Set `1` only behind a trusted proxy that replaces X-Forwarded-For; enables per-client IP rate buckets. |
+| `TRUSTED_PROXY_HOPS` | no | Default `0` skips IP buckets. Count trusted hops from the right of X-Forwarded-For; use `1` behind one nginx/Coolify proxy that appends the client address. |
+| `API_SLOTS_IP_LIMIT`, `API_WRITE_IP_LIMIT` | no | Per-minute IP limits, defaults 60 and 10. Positive integers. |
+| `API_SLOTS_KEY_LIMIT`, `API_WRITE_KEY_LIMIT` | no | Separate per-minute key limits, defaults 600 and 100. Positive integers. |
 | `E2E_FAKE_GOOGLE` | no | Tests and local UI work only: use the in-memory calendar provider and enable the test sign-in at `/dev/sign-in` (the only time email and password sign-in exists). Must refuse to enable when `NODE_ENV=production`. `pnpm run dev:fake` sets it and starts an in-memory MongoDB |
 
 ## 11. Testing and CI
@@ -209,17 +220,16 @@ None block the build. Section 6 documentation checks were settled in slice 1B; l
 Requests without Origin are accepted with a valid publishable key, with no
 Access-Control-Allow-Origin header. This supports server clients and same-origin
 GETs; keys are public, so origins are a browser policy, not authentication.
-Preflight cannot send a key: OPTIONS accepts the instance origin or an origin
-registered on any business. The actual request checks that key's own business.
+Preflight cannot send a key: OPTIONS answers uniformly for every origin without
+looking up registered origins. Actual requests check the key's own business.
+Preflight max-age is 600 seconds; allowed responses expose Retry-After.
 Responses vary by Origin; business responses also vary by X-OpenSlots-Key and
 are private-cacheable for 60 seconds. Free/busy is currently uncached.
 
 Rate counters use MongoDB atomic increments and a TTL index, separately per key
-and IP: 60 slot reads and 30 POST attempts per minute. Section 10 environment
-addition: `TRUST_PROXY_IP=1` trusts the first X-Forwarded-For value **only** behind
-an operator-controlled proxy that replaces that header. Default `0` ignores all
-forwarded headers; all remote clients share an unknown-IP bucket (conservative,
-but potentially restrictive). No key, token, or customer value is logged.
+and known IP. Defaults and overrides are in section 10. Unknown IPs skip the IP
+bucket; trusted proxy hops select from the right, ignoring spoofed prefixes.
+Race tests use distinct IPs rather than changing production defaults.
 
 Cancel permits paused/deleted services, but only future confirmed bookings.
 Reschedule requires a future confirmed booking and an active extant service;
@@ -230,12 +240,10 @@ calendar setting changes cannot redirect updates/deletes. Only the manage token
 hash is persisted; the manage URL is sent to Google in the event description.
 An admin reschedule without a token cannot reconstruct that URL.
 
-**Unresolved contract issue:** freeBusy returns intervals without event identity.
-When the booking calendar also blocks, its own Google event prevents a move
-that overlaps the old time, despite excluding the booking from MongoDB busy
-intervals. Subtracting that interval would hide other overlapping Google events.
-A safe implementation needs a provider operation that can exclude one event
-while preserving all other busy intervals (and a corresponding privacy decision
-in section 6). The current implementation fails closed in that case; the shared
-core API contract remains unchanged. The 30-attempt write limit allows the required 20-request race to exercise the
-actual route handlers, including normal rate limiting, without bypassing it.
+Overlapping reschedules deliberately fail closed for v1 as described in section 5.
+Better Auth's client sends signIn.social/linkSocial through fetch and navigates
+with window.location.href from the redirect response; it does not submit a form
+to Google. Keep form-action 'self'. Manage pages use frame-ancestors 'self';
+public booking pages remain embeddable.
+
+The gallery belongs to slice 3B and is absent from the slice 3A branch; the CSP smoke test currently checks its 404 response. Recheck the rendered gallery at integration.

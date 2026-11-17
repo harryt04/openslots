@@ -21,10 +21,10 @@ export function proxy(request: NextRequest) {
   }
 
   const response = NextResponse.next()
-  const embeddable = /^\/(b|m)\//.test(request.nextUrl.pathname)
+  const embeddable = /^\/b\//.test(request.nextUrl.pathname)
   response.headers.set(
     'Content-Security-Policy',
-    `default-src 'self'; script-src 'self' 'unsafe-inline' ${process.env.NODE_ENV === 'production' ? '' : "'unsafe-eval'"}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https://us.i.posthog.com https://us-assets.i.posthog.com; frame-ancestors ${embeddable ? '*' : "'none'"}; base-uri 'self'; form-action 'self'; object-src 'none'`,
+    `default-src 'self'; script-src 'self' 'unsafe-inline' ${process.env.NODE_ENV === 'production' ? '' : "'unsafe-eval'"}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https://us.i.posthog.com https://us-assets.i.posthog.com; frame-ancestors ${embeddable ? '*' : request.nextUrl.pathname.startsWith('/m/') ? "'self'" : "'none'"}; base-uri 'self'; form-action 'self'; object-src 'none'`,
   )
   return response
 }

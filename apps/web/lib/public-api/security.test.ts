@@ -24,3 +24,12 @@ it('accepts origins, never paths, credentials, null or remote HTTP', () => {
   ])
     expect(validOrigin(s)).toBe(false)
 })
+
+it('normalizes uppercase and internationalized origins without accepting paths', async () => {
+  const { normalizeOrigin } = await import('./security')
+  expect(normalizeOrigin('https://EXAMPLE.COM')).toBe('https://example.com')
+  expect(normalizeOrigin('https://bücher.example')).toBe(
+    'https://xn--bcher-kva.example',
+  )
+  expect(normalizeOrigin('https://example.com/path')).toBeUndefined()
+})

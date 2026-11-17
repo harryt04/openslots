@@ -1,5 +1,5 @@
 import { MongoMemoryServer } from 'mongodb-memory-server'
-import { ObjectId } from 'mongodb'
+import { ObjectId, Collection } from 'mongodb'
 import { beforeAll, afterAll, beforeEach, it, expect, vi } from 'vitest'
 vi.mock('server-only', () => ({}))
 vi.mock('../calendar', async () => {
@@ -10,6 +10,7 @@ vi.mock('../calendar', async () => {
     eventIdForBooking: (id: string) => id,
   }
 })
+let nextIp = 0
 let mongo: MongoMemoryServer
 let client: typeof import('../mongo-client')
 let handle: (typeof import('./handler'))['handle']
@@ -29,7 +30,11 @@ async function call(
   return handle(
     new Request('http://localhost:3201/api/v1/' + route, {
       method: body ? 'POST' : 'GET',
-      headers: { 'X-OpenSlots-Key': business.publishableKey, ...headers },
+      headers: {
+        'X-OpenSlots-Key': business.publishableKey,
+        'x-forwarded-for': `192.0.2.${++nextIp}`,
+        ...headers,
+      },
       ...(body ? { body: JSON.stringify(body) } : {}),
     }),
     route,
@@ -53,9 +58,11 @@ beforeAll(async () => {
   ).createMongoDbIndexes(client.mongoDBConfig.dbName)
 })
 beforeEach(async () => {
+  process.env.TRUSTED_PROXY_HOPS = '1'
   const db = await client.getDb()
   for (const name of [
     'bookings',
+    'booking_day_counts',
     'slot_locks',
     'businesses',
     'services',
@@ -196,8 +203,11 @@ it('CORS, validation, honeypot and rate limit', async () => {
   expect(
     await (await client.getDb()).collection('bookings').countDocuments(),
   ).toBe(0)
-  for (let i = 0; i < 28; i++) await call('bookings', {})
-  const limited = await call('bookings', {})
+  for (let i = 0; i < 10; i++)
+    await call('bookings', {}, undefined, { 'x-forwarded-for': '198.51.100.1' })
+  const limited = await call('bookings', {}, undefined, {
+    'x-forwarded-for': '198.51.100.1',
+  })
   expect(limited.status).toBe(429)
   expect(limited.headers.has('Retry-After')).toBe(true)
 })
@@ -272,7 +282,8 @@ it('concurrent abandoned sweeps remove pending attempts and their locks only', a
     _id: id,
     businessId: business._id,
     status: 'pending',
-    createdAt: new Date(Date.now() - 180000),
+    createdAt: new Date(Date.now() - 240000),
+    deadline: new Date(Date.now() - 1000),
   })
   await db
     .collection('slot_locks')
@@ -396,4 +407,411 @@ it('adjacent occupied intervals with buffers both succeed', async () => {
   expect(
     await (await client.getDb()).collection('slot_locks').countDocuments(),
   ).toBe(30)
+})
+
+it('unknown IP traffic is isolated by key, and proxy hops ignore spoofed prefixes', async () => {
+  process.env.TRUSTED_PROXY_HOPS = '0'
+  for (let i = 0; i < 60; i++) await call('slots')
+  const foreign = {
+    ...business,
+    _id: new ObjectId(),
+    slug: 'other',
+    publishableKey: 'os_pk_otherabcdefghijklmnopqrstuvwx',
+  }
+  await (await client.getDb()).collection('businesses').insertOne(foreign)
+  expect(
+    (
+      await call('slots', undefined, undefined, {
+        'X-OpenSlots-Key': foreign.publishableKey,
+      })
+    ).status,
+  ).toBe(400)
+  process.env.TRUSTED_PROXY_HOPS = '1'
+  for (let i = 0; i < 60; i++)
+    await call('slots', undefined, undefined, {
+      'x-forwarded-for': `spoof${i}, 198.51.100.2`,
+    })
+  expect(
+    (
+      await call('slots', undefined, undefined, {
+        'x-forwarded-for': 'new-spoof, 198.51.100.2',
+      })
+    ).status,
+  ).toBe(429)
+})
+it('invalid stored responses are internal errors and log paths only', async () => {
+  await (
+    await client.getDb()
+  )
+    .collection('businesses')
+    .updateOne({ _id: business._id }, { $set: { timezone: 'invalid-zone' } })
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    const response = await call('business')
+    expect(response.status).toBe(500)
+    expect((await response.json()).error.code).toBe('internal_error')
+    expect(JSON.stringify(log.mock.calls)).not.toContain('invalid-zone')
+    expect(JSON.stringify(log.mock.calls)).toContain('timezone')
+  } finally {
+    log.mockRestore()
+  }
+})
+it('uniform preflight reveals no origin registration and exposes retry headers', async () => {
+  for (const origin of ['https://example.test', 'https://unregistered.test']) {
+    const response = await handle(
+      new Request('http://localhost/api/v1/business', {
+        method: 'OPTIONS',
+        headers: { Origin: origin },
+      }),
+      'business',
+    )
+    expect(response.status).toBe(204)
+    expect(response.headers.get('Access-Control-Max-Age')).toBe('600')
+  }
+  const response = await call('business', undefined, undefined, {
+    Origin: 'https://example.test',
+  })
+  expect(response.headers.get('Access-Control-Expose-Headers')).toBe(
+    'Retry-After',
+  )
+  expect(
+    (
+      await handle(
+        new Request('http://localhost/api/v1/business', {
+          method: 'PUT',
+          headers: { 'X-OpenSlots-Key': business.publishableKey },
+        }),
+        'business',
+      )
+    ).status,
+  ).toBe(405)
+})
+
+it('expired in-flight create never confirms after a second customer wins', async () => {
+  const { FakeCalendarProvider } = await import('../calendar/fake')
+  const original = FakeCalendarProvider.prototype.createEvent
+  let release!: () => void
+  let entered!: () => void
+  const enteredPromise = new Promise<void>((r) => {
+    entered = r
+  })
+  const gate = new Promise<void>((r) => {
+    release = r
+  })
+  const spy = vi
+    .spyOn(FakeCalendarProvider.prototype, 'createEvent')
+    .mockImplementationOnce(async function (
+      this: import('../calendar/fake').FakeCalendarProvider,
+      ...args
+    ) {
+      entered()
+      await gate
+      return original.apply(this, args)
+    })
+  const first = call('bookings', input())
+  await enteredPromise
+  await (
+    await client.getDb()
+  )
+    .collection('bookings')
+    .updateOne(
+      { status: 'pending' },
+      { $set: { deadline: new Date(Date.now() - 1) } },
+    )
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 240000)
+  const second = await call('bookings', input()).finally(() =>
+    clock.mockRestore(),
+  )
+  release()
+  const response = await first
+  spy.mockRestore()
+  expect(response.status).toBe(409)
+  expect(second.status).toBe(201)
+  const db = await client.getDb()
+  const confirmed = await db
+    .collection('bookings')
+    .find({ status: 'confirmed' })
+    .toArray()
+  expect(confirmed).toHaveLength(1)
+  expect(Object.keys(state.events)).toHaveLength(1)
+  expect(
+    await db
+      .collection('slot_locks')
+      .countDocuments({ bookingId: confirmed[0]!._id }),
+  ).toBe(12)
+  expect(await db.collection('slot_locks').countDocuments()).toBe(12)
+})
+it('ambiguous create deletes the deterministic event, or retains locks for recovery', async () => {
+  const { FakeCalendarProvider } = await import('../calendar/fake')
+  const original = FakeCalendarProvider.prototype.createEvent
+  const spy = vi
+    .spyOn(FakeCalendarProvider.prototype, 'createEvent')
+    .mockImplementation(async function (
+      this: import('../calendar/fake').FakeCalendarProvider,
+      ...args
+    ) {
+      await original.apply(this, args)
+      throw Error('response lost')
+    })
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    expect((await call('bookings', input())).status).toBe(502)
+    expect(Object.keys(state.events)).toHaveLength(0)
+    const deletion = vi
+      .spyOn(FakeCalendarProvider.prototype, 'deleteEvent')
+      .mockRejectedValueOnce(Error('unreachable'))
+    expect((await call('bookings', input())).status).toBe(502)
+    deletion.mockRestore()
+    const db = await client.getDb()
+    expect(
+      await db
+        .collection('bookings')
+        .countDocuments({ status: 'recovery_required' }),
+    ).toBe(1)
+    expect(await db.collection('slot_locks').countDocuments()).toBe(12)
+    await (await import('../bookings/service')).sweepAbandoned()
+    expect(await db.collection('slot_locks').countDocuments()).toBe(12)
+  } finally {
+    spy.mockRestore()
+    log.mockRestore()
+  }
+})
+it('stale changes recover, fresh claims refuse; admin patches preserve description', async () => {
+  const created = await (await call('bookings', input())).json()
+  const db = await client.getDb()
+  const id = new ObjectId(created.id)
+  const { rescheduleBooking } = await import('../bookings/service')
+  await db
+    .collection('bookings')
+    .updateOne(
+      { _id: id },
+      { $set: { changing: true, changingAt: new Date() } },
+    )
+  await expect(
+    rescheduleBooking(business, id, new Date(+start + 7200000)),
+  ).rejects.toMatchObject({ code: 'booking_not_changeable' })
+  await db
+    .collection('bookings')
+    .updateOne(
+      { _id: id },
+      { $set: { changingAt: new Date(Date.now() - 240000) } },
+    )
+  const { FakeCalendarProvider } = await import('../calendar/fake')
+  const patch = vi.spyOn(FakeCalendarProvider.prototype, 'updateEvent')
+  try {
+    await rescheduleBooking(business, id, new Date(+start + 7200000))
+    expect(patch.mock.calls[0]![2].description).toBeUndefined()
+  } finally {
+    patch.mockRestore()
+  }
+})
+it('cap is atomic across nonoverlapping times and cancel frees capacity', async () => {
+  const db = await client.getDb()
+  await db
+    .collection('services')
+    .updateOne({ _id: service }, { $set: { maxPerDay: 2 } })
+  const responses = await Promise.all(
+    Array.from({ length: 20 }, (_, i) =>
+      call(
+        'bookings',
+        input(new Date(+start - 10 * 3600000 + i * 3600000).toISOString()),
+      ),
+    ),
+  )
+  const winners = responses.filter((r) => r.status === 201)
+  expect(winners).toHaveLength(2)
+  const first = await winners[0]!.json()
+  expect(
+    (await call('cancel', {}, first.manageUrl.split('/').pop())).status,
+  ).toBe(200)
+  expect((await call('bookings', input(first.start))).status).toBe(201)
+})
+
+it('ambiguous patch holds both intervals, and overlapping moves have clear outcome', async () => {
+  const created = await (await call('bookings', input())).json()
+  const token = created.manageUrl.split('/').pop()
+  const overlap = await call(
+    'reschedule',
+    { start: new Date(+start + 1800000).toISOString() },
+    token,
+  )
+  expect(overlap.status).toBe(409)
+  expect((await overlap.json()).error.message).toContain('does not overlap')
+  const { FakeCalendarProvider } = await import('../calendar/fake')
+  const original = FakeCalendarProvider.prototype.updateEvent
+  const patch = vi
+    .spyOn(FakeCalendarProvider.prototype, 'updateEvent')
+    .mockImplementationOnce(async function (
+      this: import('../calendar/fake').FakeCalendarProvider,
+      ...args
+    ) {
+      await original.apply(this, args)
+      throw Error('lost response')
+    })
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    expect(
+      (
+        await call(
+          'reschedule',
+          { start: new Date(+start + 7200000).toISOString() },
+          token,
+        )
+      ).status,
+    ).toBe(502)
+    const db = await client.getDb()
+    expect(await db.collection('slot_locks').countDocuments()).toBe(24)
+    expect(
+      await db
+        .collection('bookings')
+        .countDocuments({ status: 'recovery_required' }),
+    ).toBe(1)
+  } finally {
+    patch.mockRestore()
+    log.mockRestore()
+  }
+})
+it('sweeps resume claimed cleanup, orphan cleanup and surplus confirmed locks safely', async () => {
+  const created = await (await call('bookings', input())).json()
+  const db = await client.getDb()
+  const abandoned = new ObjectId(),
+    orphan = new ObjectId()
+  await db
+    .collection('bookings')
+    .updateOne(
+      { _id: new ObjectId(created.id) },
+      { $set: { changing: true, changingAt: new Date(0) } },
+    )
+  const { reserveCapacity, capacityCount } =
+    await import('../bookings/capacity')
+  await reserveCapacity('stale-date', new ObjectId(created.id), 1)
+  await db
+    .collection('bookings')
+    .insertOne({ _id: abandoned, status: 'abandoned', deadline: new Date(0) })
+  await db.collection('slot_locks').insertMany(
+    [abandoned, orphan, new ObjectId(created.id)].map((bookingId, i) => ({
+      businessId: business._id,
+      bookingId,
+      block: i,
+      createdAt: new Date(0),
+    })),
+  )
+  const { sweepAbandoned } = await import('../bookings/service')
+  await Promise.all([sweepAbandoned(), sweepAbandoned()])
+  expect(await db.collection('slot_locks').countDocuments()).toBe(12)
+  expect(await db.collection('bookings').countDocuments()).toBe(1)
+  expect(await capacityCount('stale-date')).toBe(0)
+})
+it('reschedule across service-local dates moves capacity and leaves other services independent', async () => {
+  const db = await client.getDb()
+  await db
+    .collection('services')
+    .updateOne({ _id: service }, { $set: { maxPerDay: 1 } })
+  const created = await (await call('bookings', input())).json()
+  expect(
+    (
+      await call(
+        'reschedule',
+        { start: new Date(+start + 86400000).toISOString() },
+        created.manageUrl.split('/').pop(),
+      )
+    ).status,
+  ).toBe(200)
+  expect((await call('bookings', input())).status).toBe(201)
+  expect(
+    (
+      await call(
+        'bookings',
+        input(new Date(+start + 86400000 + 7200000).toISOString()),
+      )
+    ).status,
+  ).toBe(409)
+  const original = await db.collection('services').findOne({ _id: service })
+  const other = new ObjectId()
+  await db
+    .collection('services')
+    .insertOne({ ...original, _id: other, slug: 'other' })
+  expect(
+    (
+      await call('bookings', {
+        ...input(new Date(+start + 7200000).toISOString()),
+        serviceId: String(other),
+      })
+    ).status,
+  ).toBe(201)
+})
+
+it('same-date reschedule does not count its own daily reservation', async () => {
+  await (
+    await client.getDb()
+  )
+    .collection('services')
+    .updateOne({ _id: service }, { $set: { maxPerDay: 1 } })
+  const created = await (await call('bookings', input())).json()
+  expect(
+    (
+      await call(
+        'reschedule',
+        { start: new Date(+start + 7200000).toISOString() },
+        created.manageUrl.split('/').pop(),
+      )
+    ).status,
+  ).toBe(200)
+})
+
+it('crash before moving the booking document retains old and new locks', async () => {
+  const created = await (await call('bookings', input())).json()
+  const original = Collection.prototype.updateOne
+  const next = new Date(+start + 7200000)
+  const spy = vi
+    .spyOn(Collection.prototype, 'updateOne')
+    .mockImplementation(async function (this: Collection, ...args) {
+      const update = args[1] as { $set?: { start?: Date } }
+      if (
+        this.collectionName === 'bookings' &&
+        update.$set?.start?.getTime() === +next
+      )
+        throw Error('crash before document move')
+      return original.apply(this, args)
+    })
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    expect(
+      (
+        await call(
+          'reschedule',
+          { start: next.toISOString() },
+          created.manageUrl.split('/').pop(),
+        )
+      ).status,
+    ).toBe(500)
+    const db = await client.getDb()
+    expect(await db.collection('slot_locks').countDocuments()).toBe(24)
+    expect(
+      (
+        await db
+          .collection('bookings')
+          .findOne({ _id: new ObjectId(created.id) })
+      )?.start,
+    ).toEqual(start)
+  } finally {
+    spy.mockRestore()
+    log.mockRestore()
+  }
+})
+
+it('sweep reconciles a crash after event creation before releasing locks', async () => {
+  const created = await (await call('bookings', input())).json()
+  const db = await client.getDb()
+  await db
+    .collection('bookings')
+    .updateOne(
+      { _id: new ObjectId(created.id) },
+      { $set: { status: 'pending', deadline: new Date(0) } },
+    )
+  const { sweepAbandoned } = await import('../bookings/service')
+  await sweepAbandoned()
+  expect(Object.keys(state.events)).toHaveLength(0)
+  expect(await db.collection('bookings').countDocuments()).toBe(0)
+  expect(await db.collection('slot_locks').countDocuments()).toBe(0)
 })

@@ -9,3 +9,13 @@ export async function POST(
 export async function OPTIONS(request: Request) {
   return handle(request, 'reschedule')
 }
+
+export const GET = POST
+
+export const PUT = POST
+
+export const PATCH = POST
+
+export const DELETE = POST
+
+export const HEAD = POST

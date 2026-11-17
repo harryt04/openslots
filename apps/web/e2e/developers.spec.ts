@@ -105,3 +105,46 @@ test('developers settings and a public API booking journey', async ({
   expect(cancelled.status()).toBe(200)
   expect((await cancelled.json()).status).toBe('cancelled')
 })
+
+test('fake owner flows report no CSP violations', async ({ page }) => {
+  const manage = await page.request.get('/m/test')
+  expect(manage.headers()['content-security-policy']).toContain(
+    "frame-ancestors 'self'",
+  )
+  const booking = await page.request.get('/b/test')
+  expect(booking.headers()['content-security-policy']).toContain(
+    'frame-ancestors *',
+  )
+  await page.addInitScript(() => {
+    const violations: string[] = []
+    Object.assign(window, { cspViolations: violations })
+    document.addEventListener('securitypolicyviolation', (e) => {
+      violations.push(e.violatedDirective)
+      sessionStorage.setItem('cspViolations', JSON.stringify(violations))
+    })
+  })
+  await page.goto('/dev/sign-in')
+  await page.getByLabel('Email').fill(`csp-${Date.now()}@example.test`)
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.getByLabel('Business name').fill('CSP Salon')
+  await page.getByLabel('Booking page address').fill(`csp-${Date.now()}`)
+  await page.getByRole('button', { name: 'Create business' }).click()
+  await expect(page).toHaveURL(/availability/)
+  for (const route of [
+    '/calendars',
+    '/services',
+    '/availability',
+    '/developers',
+    '/dev/gallery',
+  ]) {
+    await page.goto(route)
+    await expect(page.locator('body')).toBeVisible()
+    if (route === '/calendars') {
+      await page.getByRole('button', { name: /Connect signed-in/ }).click()
+      await expect(page.getByText('New bookings go here')).toBeVisible()
+    }
+    expect(
+      await page.evaluate(() => sessionStorage.getItem('cspViolations')),
+    ).toBeNull()
+  }
+})

@@ -12,7 +12,8 @@ export type BookingDoc = {
   >
   start: Date
   end: Date
-  status: 'pending' | 'confirmed' | 'cancelled'
+  status:
+    'pending' | 'confirmed' | 'cancelled' | 'abandoned' | 'recovery_required'
   customer: {
     name: string
     email: string
@@ -24,6 +25,10 @@ export type BookingDoc = {
   googleEventId?: string
   calendar?: { accountId: string; calendarId: string }
   rescheduledFrom?: Date
+  capacityKey?: string
+  deadline?: Date
+  changingTarget?: Date
+  changingAt?: Date
   changing?: boolean
   createdAt: Date
   updatedAt: Date
