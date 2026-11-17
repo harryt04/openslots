@@ -1,5 +1,7 @@
 import { betterAuth } from 'better-auth'
 import { mongodbAdapter } from 'better-auth/adapters/mongodb'
+import { APIError } from 'better-auth/api'
+import { isEmailAllowed } from './allowlist'
 import { nextCookies } from 'better-auth/next-js'
 import { MongoClient } from 'mongodb'
 
@@ -21,6 +23,33 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: isFakeGoogle(),
   },
+  socialProviders: {
+    google: {
+      clientId: process.env.GOOGLE_CLIENT_ID ?? '',
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
+      accessType: 'offline',
+      prompt: 'consent',
+      scope: [
+        'https://www.googleapis.com/auth/calendar.freebusy',
+        'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+        'https://www.googleapis.com/auth/calendar.events',
+      ],
+      mapProfileToUser(profile) {
+        if (!isEmailAllowed(profile.email)) {
+          throw new APIError('FORBIDDEN', {
+            code: 'EMAIL_NOT_ALLOWED',
+            message: 'This Google account is not allowed on this instance.',
+          })
+        }
+        return {}
+      },
+    },
+  },
+  account: {
+    encryptOAuthTokens: true,
+    accountLinking: { enabled: true, allowDifferentEmails: true },
+  },
+  onAPIError: { errorURL: '/login' },
   // nextCookies must stay the last plugin.
   plugins: [nextCookies()],
 })

@@ -59,3 +59,13 @@ Run one package with `pnpm --filter @openslots/core test` (or `@openslots/react`
 - **Workspace packages export TypeScript source** to the app (`exports` in their `package.json`); `publishConfig` points npm at `dist`. The app does not need the packages built first.
 - **The shadcn CLI may write a wrong `cn` import** (`from "cn"`) into new components in this workspace. Correct it to `@/lib/utils`; that is the one hand-edit allowed in `components/ui`.
 - **For browser checks use `agent-browser`** with a session named for your worktree, against `pnpm run dev:fake`.
+
+## Fake calendar contract
+
+In fake mode, use the signed-in user's id as the virtual Google account id:
+`calendarProvider({ id: session.user.id, userId: session.user.id })`.
+The default account has a writable `primary` calendar. Server-side tests can call
+`seedFakeCalendar(accountId, { calendars, busy, authFailure })`; the returned state
+records events and create/update/delete operations. State survives module reloads
+in the development server through globalThis, and is lost on server exit.
+The email/password route at /dev/sign-in remains fake-only and is absent in production.
