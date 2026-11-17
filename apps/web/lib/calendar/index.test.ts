@@ -61,3 +61,16 @@ it.each(REQUIRED_SCOPES)(
     ).rejects.toBeInstanceOf(CalendarAuthError)
   },
 )
+
+it('bounds a hung token refresh and keeps timeout transient', async () => {
+  vi.useFakeTimers()
+  getAccessToken.mockImplementation(() => new Promise(() => {}))
+  try {
+    const result = calendarProvider({ id: 'a', userId: 'u' }).listCalendars()
+    const assertion = expect(result).rejects.toBeInstanceOf(CalendarError)
+    await vi.advanceTimersByTimeAsync(15_001)
+    await assertion
+  } finally {
+    vi.useRealTimers()
+  }
+})

@@ -5,13 +5,20 @@ import { requireBusiness } from '@/lib/businesses/current'
 
 export const metadata: Metadata = { title: 'Developers' }
 
-// Placeholder: slice 3A replaces the content.
+import { Settings } from './settings'
 export default async function Page() {
-  await requireBusiness()
+  const { business } = await requireBusiness()
   return (
-    <PageHeader
-      title="Developers"
-      description="Embed booking on your own site."
-    />
+    <>
+      <PageHeader
+        title="Developers"
+        description="Embed booking on your own site."
+      />
+      <Settings
+        publishableKey={business.publishableKey}
+        origins={business.allowedOrigins}
+        host={new URL(process.env.BETTER_AUTH_URL!).origin}
+      />
+    </>
   )
 }
