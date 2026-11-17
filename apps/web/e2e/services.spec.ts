@@ -1,4 +1,9 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect as baseExpect, test, type Page } from '@playwright/test'
+
+// These tests open routes the dev server may not have compiled yet, which
+// can take longer than the default 5 seconds on a cold CI runner.
+const expect = baseExpect.configure({ timeout: 20_000 })
+test.slow()
 
 async function signInWithBusiness(page: Page, name: string) {
   const stamp = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`
