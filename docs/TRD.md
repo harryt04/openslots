@@ -168,7 +168,10 @@ remain when a cap is removed, until their bookings end.
 
 A same-date move keeps capOpId and inserts/deletes no cap place. Cross-date moves
 of a capped service take N's place, commit capOpId N and prevCapOpId old, then
-reconcile the old place. A legacy cross-date move becomes capManaged.
+reconcile the old place. A legacy cross-date move becomes capManaged. If the cap has been removed, a
+managed booking cannot move across dates: keeping its old-date place while
+excluding it from future legacy counts would permit overbooking if a cap were
+re-enabled. Refuse the move conservatively; cancel and book again instead.
 computeSlots receives counts per service/date for confirmed and unexpired
 pending bookings, independently of lock acquisition.
 

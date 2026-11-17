@@ -547,6 +547,16 @@ export async function rescheduleBooking(
   if (!service?.active) throw new ApiFailure('booking_not_changeable')
   const schedule = await getSchedule(business._id, String(service.scheduleId))
   if (!schedule) throw new ApiFailure('slot_taken')
+  if (
+    b.capManaged &&
+    !service.maxPerDay &&
+    localDateOf(start, schedule.timezone) !==
+      localDateOf(b.start, schedule.timezone)
+  )
+    throw new ApiFailure(
+      'slot_taken',
+      'This booking keeps a daily place. Cancel and book again to change dates.',
+    )
   const opId = crypto.randomUUID()
   if (!(await cas(b, { pendingOp: { opId, startedAt: new Date() } })))
     throw new ApiFailure('slot_taken')

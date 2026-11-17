@@ -1303,18 +1303,37 @@ it('bounded orphan passes advance beyond retained current locks', async () => {
     .collection('slot_locks')
     .updateMany({}, { $set: { createdAt: new Date(0) } })
   const orphan = new ObjectId()
-  await db
-    .collection('slot_locks')
-    .insertOne({
-      businessId: business._id,
-      bookingId: orphan,
-      block: 1,
-      opId: 'orphan',
-      createdAt: new Date(0),
-    })
+  await db.collection('slot_locks').insertOne({
+    businessId: business._id,
+    bookingId: orphan,
+    block: 1,
+    opId: 'orphan',
+    createdAt: new Date(0),
+  })
   for (let i = 0; i < 5; i++) await sweep()
   expect(
     await db.collection('slot_locks').countDocuments({ bookingId: orphan }),
   ).toBe(0)
+  await assertInvariants()
+})
+
+it('a managed booking cannot move dates while its service cap is removed', async () => {
+  const db = await client.getDb()
+  await db
+    .collection('services')
+    .updateOne({ _id: service }, { $set: { maxPerDay: 1 } })
+  const created = await (await call('bookings', input())).json()
+  await db
+    .collection('services')
+    .updateOne({ _id: service }, { $unset: { maxPerDay: '' } })
+  expect(
+    (
+      await call(
+        'reschedule',
+        { start: new Date(+start + 86400000).toISOString() },
+        created.manageUrl.split('/').pop(),
+      )
+    ).status,
+  ).toBe(409)
   await assertInvariants()
 })
