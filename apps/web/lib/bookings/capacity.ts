@@ -1,4 +1,4 @@
-import { localDateOf } from '@openslots/core'
+import { localDateOf, wallTimeToUtc, addDays } from '@openslots/core'
 import { getDb } from '../mongo-client'
 import { ApiFailure } from '../public-api/security'
 import { bookings, type BookingDoc } from './repository'
@@ -20,6 +20,10 @@ export async function reserveCapacity(
       _id: { $ne: b._id },
       status: { $in: ['pending', 'confirmed'] },
       capManaged: { $ne: true },
+      start: {
+        $gte: wallTimeToUtc(date, 0, timezone, 'later')!,
+        $lt: wallTimeToUtc(addDays(date, 1), 0, timezone, 'later')!,
+      },
     })
     .toArray()
   const u = legacy.filter(
@@ -34,6 +38,16 @@ export async function reserveCapacity(
         capKey: `${b.serviceId}|${date}|${i}`,
         createdAt: new Date(),
       })
+      const locks = (await getDb()).collection('cap_locks')
+      const prefix = `${b.serviceId}|${date}|`
+      const count = await locks.countDocuments({
+        businessId: b.businessId,
+        capKey: { $gte: prefix, $lt: prefix + '\uffff' },
+      })
+      if (count + u > cap) {
+        await locks.deleteMany({ opId })
+        throw new ApiFailure('slot_taken')
+      }
       return
     } catch (e) {
       if (!(e && typeof e === 'object' && 'code' in e && e.code === 11000))

@@ -85,6 +85,9 @@ test('calendar linking, choices, auth failure and reconnect', async ({
   await capture('banner')
   await page.goto('/calendars')
   await page.getByRole('button', { name: 'Reconnect', exact: true }).click()
+  // Fake reconnect also refreshes the outgoing page. Wait for its full return
+  // navigation before interacting with the newly connected account.
+  await page.waitForURL(/\/calendars\?notice=/)
   await expect(page.getByText('Connected', { exact: true })).toHaveCount(2)
   page.on('dialog', (dialog) => dialog.accept())
   await page.getByRole('button', { name: 'Unlink', exact: true }).last().click()

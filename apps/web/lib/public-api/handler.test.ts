@@ -11,6 +11,13 @@ vi.mock('../calendar', async () => {
     eventIdForBooking: (id: string) => id,
   }
 })
+function activeEvents() {
+  return Object.fromEntries(
+    Object.entries(state.events).filter(
+      ([, value]) => value.event.status !== 'cancelled',
+    ),
+  )
+}
 let nextIp = 0
 let mongo: MongoMemoryServer
 let client: typeof import('../mongo-client')
@@ -156,7 +163,7 @@ for (let run = 0; run < 3; run++)
       await db.collection('bookings').countDocuments({ status: 'confirmed' }),
     ).toBe(1)
     expect(await db.collection('slot_locks').countDocuments()).toBe(12)
-    expect(Object.keys(state.events)).toHaveLength(1)
+    expect(Object.keys(activeEvents())).toHaveLength(1)
   })
 it('route journey and tenant token isolation', async () => {
   const response = await call('bookings', input())
@@ -176,7 +183,7 @@ it('route journey and tenant token isolation', async () => {
   ).toBe(200)
   expect(state.operations.map((o) => o.kind)).toEqual(['create', 'update'])
   expect((await call('cancel', {}, token)).status).toBe(200)
-  expect(Object.keys(state.events)).toHaveLength(0)
+  expect(Object.keys(activeEvents())).toHaveLength(0)
   expect(
     await (await client.getDb()).collection('slot_locks').countDocuments(),
   ).toBe(0)
@@ -349,7 +356,7 @@ it('20 concurrent reschedules to one target leave one winner and preserve ninete
     await db.collection('bookings').countDocuments({ start: target }),
   ).toBe(1)
   expect(await db.collection('slot_locks').countDocuments()).toBe(240)
-  expect(Object.keys(state.events)).toHaveLength(20)
+  expect(Object.keys(activeEvents())).toHaveLength(20)
   expect(state.operations.filter((o) => o.kind === 'update')).toHaveLength(1)
 })
 it('a different business key cannot manage another booking, and repository reads are scoped', async () => {
@@ -537,7 +544,7 @@ it('expired in-flight create never confirms after a second customer wins', async
     .find({ status: 'confirmed' })
     .toArray()
   expect(confirmed).toHaveLength(1)
-  expect(Object.keys(state.events)).toHaveLength(1)
+  expect(Object.keys(activeEvents())).toHaveLength(1)
   expect(
     await db
       .collection('slot_locks')
@@ -560,7 +567,7 @@ it('ambiguous create deletes the deterministic event, or retains locks for recov
   const log = vi.spyOn(console, 'error').mockImplementation(() => {})
   try {
     expect((await call('bookings', input())).status).toBe(502)
-    expect(Object.keys(state.events)).toHaveLength(0)
+    expect(Object.keys(activeEvents())).toHaveLength(0)
     const deletion = vi
       .spyOn(FakeCalendarProvider.prototype, 'deleteEvent')
       .mockRejectedValueOnce(Error('unreachable'))
@@ -571,6 +578,9 @@ it('ambiguous create deletes the deterministic event, or retains locks for recov
       await db.collection('bookings').countDocuments({ cleanup: true }),
     ).toBe(1)
     expect(await db.collection('slot_locks').countDocuments()).toBe(12)
+    await db
+      .collection('bookings')
+      .updateMany({}, { $set: { syncAt: new Date(0), retryAt: new Date(0) } })
     await (await import('../bookings/service')).sweepAbandoned()
     expect(await db.collection('slot_locks').countDocuments()).toBe(0)
   } finally {
@@ -785,7 +795,7 @@ it('sweep reconciles a crash after event creation before releasing locks', async
     )
   const { sweepAbandoned } = await import('../bookings/service')
   await sweepAbandoned()
-  expect(Object.keys(state.events)).toHaveLength(0)
+  expect(Object.keys(activeEvents())).toHaveLength(0)
   expect(
     await db.collection('bookings').countDocuments({ abandoned: true }),
   ).toBe(1)
@@ -882,12 +892,16 @@ async function drain() {
   await db
     .collection('bookings')
     .updateMany({ status: 'pending' }, { $set: { expiresAt: new Date(0) } })
-  await db
-    .collection('bookings')
-    .updateMany(
-      {},
-      { $set: { syncAt: new Date(0), 'pendingOp.startedAt': new Date(0) } },
-    )
+  await db.collection('bookings').updateMany(
+    {},
+    {
+      $set: {
+        retryAt: new Date(0),
+        syncAt: new Date(0),
+        'pendingOp.startedAt': new Date(0),
+      },
+    },
+  )
   for (let i = 0; i < 4; i++) await sweep()
   await db
     .collection('bookings')
@@ -916,7 +930,7 @@ async function drain() {
     .collection('bookings')
     .find({ status: 'confirmed' })
     .toArray()
-  expect(Object.keys(state.events).sort()).toEqual(
+  expect(Object.keys(activeEvents()).sort()).toEqual(
     confirmed.map((b) => b.googleEventId).sort(),
   )
   for (const b of confirmed) {
@@ -998,7 +1012,7 @@ it('late creates are deleted again after tombstone cleanup', async () => {
     .collection('bookings')
     .updateMany({}, { $set: { expiresAt: new Date(0) } })
   await sweep()
-  expect(Object.keys(state.events)).toHaveLength(0)
+  expect(Object.keys(activeEvents())).toHaveLength(0)
   gate.release()
   expect((await pending).status).toBe(409)
   // Model a server-side late application after the client's cleanup response.
@@ -1016,7 +1030,7 @@ it('late creates are deleted again after tombstone cleanup', async () => {
     .collection('bookings')
     .updateMany({}, { $set: { purgeAfter: new Date(0) } })
   await sweep()
-  expect(Object.keys(state.events)).toHaveLength(0)
+  expect(Object.keys(activeEvents())).toHaveLength(0)
   expect(await db.collection('bookings').countDocuments()).toBe(0)
 })
 it('cap one accepts exactly one new managed booking', async () => {
@@ -1088,6 +1102,7 @@ it('same-date cap moves preserve the cap operation; cross-date moves replace it'
 
 for (const seed of [17, 903, 4421])
   it(`random state-machine operations preserve invariants (seed ${seed})`, async () => {
+    await staleClaimInterleaving()
     let randomState = seed
     const random = (n: number) => {
       randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0
@@ -1104,7 +1119,7 @@ for (const seed of [17, 903, 4421])
     const { FakeCalendarProvider } = await import('../calendar/fake')
     for (let step = 0; step < 240; step++) {
       await db.collection('api_rate_limits').deleteMany({})
-      const operation = random(9)
+      const operation = random(13)
       const time = new Date(+start + random(7) * 1800000).toISOString()
       const token = tokens[random(Math.max(tokens.length, 1))]
       let spy: ReturnType<typeof vi.spyOn> | undefined
@@ -1149,6 +1164,62 @@ for (const seed of [17, 903, 4421])
           state.pause = undefined
           if (response.status === 201)
             tokens.push((await response.json()).manageUrl.split('/').pop())
+        } else if (operation === 9 && token) {
+          const gate = pauseCalendar('update')
+          const moving = call('reschedule', { start: time }, token)
+          const reached = await Promise.race([
+            gate.ready.then(() => true),
+            moving.then(() => false),
+          ])
+          if (reached) {
+            await sweep()
+            await call(
+              'bookings',
+              input(new Date(+start + 6 * 1800000).toISOString()),
+            )
+            await call('cancel', {}, token)
+          }
+          gate.release()
+          await moving
+          state.pause = undefined
+        } else if (operation === 10) {
+          const cap = random(3)
+          await db
+            .collection('services')
+            .updateOne(
+              { _id: service },
+              cap
+                ? { $set: { maxPerDay: cap } }
+                : { $unset: { maxPerDay: '' } },
+            )
+        } else if (operation === 11) {
+          const { CalendarAuthError, CalendarError } =
+            await import('../calendar/types')
+          const kind = (['createEvent', 'updateEvent', 'deleteEvent'] as const)[
+            random(3)
+          ]!
+          const failure = vi
+            .spyOn(FakeCalendarProvider.prototype, kind)
+            .mockRejectedValueOnce(
+              random(2) ? new CalendarAuthError() : new CalendarError(503),
+            )
+          try {
+            if (kind === 'createEvent') await call('bookings', input(time))
+            else if (kind === 'updateEvent' && token)
+              await call('reschedule', { start: time }, token)
+            else if (token) await call('cancel', {}, token)
+            await sweep()
+          } finally {
+            failure.mockRestore()
+          }
+        } else if (operation === 12) {
+          await db
+            .collection('bookings')
+            .updateMany(
+              {},
+              { $set: { retryAt: new Date(0), syncAt: new Date(0) } },
+            )
+          await Promise.all([sweep(), sweep()])
         } else if (operation === 3 && token) await call('cancel', {}, token)
         else if ((operation === 4 || operation === 6) && token)
           await call('reschedule', { start: time }, token)
@@ -1157,7 +1228,7 @@ for (const seed of [17, 903, 4421])
             .collection('bookings')
             .updateMany(
               { syncAt: { $exists: true } },
-              { $set: { syncAt: new Date(0) } },
+              { $set: { syncAt: new Date(0), retryAt: new Date(0) } },
             )
           await db
             .collection('bookings')
@@ -1168,12 +1239,8 @@ for (const seed of [17, 903, 4421])
           await sweep()
         } else await sweep()
         await assertInvariants()
-        for (const id of [service, secondService])
-          expect(
-            await db
-              .collection('bookings')
-              .countDocuments({ serviceId: id, status: 'confirmed' }),
-          ).toBeLessThanOrEqual(2)
+        // Lowering a cap can leave pre-existing usage above it; lock ownership
+        // remains checked above, and dedicated admission tests cover the bound.
       } catch (e) {
         throw new Error(`seed ${seed}, step ${step}`, { cause: e })
       } finally {
@@ -1336,4 +1403,664 @@ it('a managed booking cannot move dates while its service cap is removed', async
     ).status,
   ).toBe(409)
   await assertInvariants()
+})
+
+for (const removed of [false, true])
+  it(`cap locks outside restored/lowered range count (removed=${removed})`, async () => {
+    const db = await client.getDb()
+    const { reserveCapacity } = await import('../bookings/capacity')
+    const { bookings } = await import('../bookings/repository')
+    const created = await (await call('bookings', input())).json()
+    const b = (await (
+      await bookings()
+    ).findOne({ _id: new ObjectId(created.id) }))!
+    const date = iso.slice(0, 10)
+    await db.collection('cap_locks').insertOne({
+      businessId: business._id,
+      bookingId: b._id,
+      opId: 'old',
+      capKey: `${service}|${date}|2`,
+      createdAt: new Date(),
+    })
+    if (removed)
+      await db
+        .collection('services')
+        .updateOne({ _id: service }, { $unset: { maxPerDay: '' } })
+    await db
+      .collection('services')
+      .updateOne({ _id: service }, { $set: { maxPerDay: 2 } })
+    const results = await Promise.allSettled(
+      ['a', 'b'].map((op) => reserveCapacity(b, op, start, 'UTC', 2)),
+    )
+    expect(
+      results.filter((r) => r.status === 'fulfilled').length,
+    ).toBeLessThanOrEqual(1)
+    expect(
+      await db.collection('cap_locks').countDocuments(),
+    ).toBeLessThanOrEqual(2)
+  })
+it('fifty failed tenants do not starve later cleanup', async () => {
+  const db = await client.getDb()
+  const created = await (await call('bookings', input())).json()
+  const original = await db
+    .collection('bookings')
+    .findOne({ _id: new ObjectId(created.id) })
+  await db.collection('bookings').insertMany(
+    Array.from({ length: 50 }, (_, i) => ({
+      ...original,
+      _id: new ObjectId(),
+      businessId: new ObjectId(),
+      manageTokenHash: `stuck${i}`,
+      cleanup: true,
+      status: 'cancelled',
+      syncAt: new Date(0),
+    })),
+  )
+  await db
+    .collection('bookings')
+    .updateOne(
+      { _id: original!._id },
+      { $set: { status: 'cancelled', cleanup: true } },
+    )
+  await sweep()
+  await sweep()
+  expect(
+    await db
+      .collection('slot_locks')
+      .countDocuments({ bookingId: original!._id }),
+  ).toBe(0)
+  expect(
+    await db
+      .collection('bookings')
+      .countDocuments({ retryAt: { $gt: new Date() } }),
+  ).toBe(50)
+})
+
+for (const field of ['eventSync', 'prevOpId', 'prevCapOpId'])
+  it(`refuses a second move with ${field} still set`, async () => {
+    const db = await client.getDb()
+    const created = await (await call('bookings', input())).json()
+    await db
+      .collection('bookings')
+      .updateOne(
+        { _id: new ObjectId(created.id) },
+        { $set: { [field]: field === 'eventSync' ? true : 'previous' } },
+      )
+    expect(
+      (
+        await call(
+          'reschedule',
+          { start: new Date(+start + 86400000).toISOString() },
+          created.manageUrl.split('/').pop(),
+        )
+      ).status,
+    ).toBe(409)
+  })
+it('late confirmation never confirms an expired pending attempt', async () => {
+  const gate = pauseCalendar('create')
+  const pending = call('bookings', input())
+  await gate.ready
+  const db = await client.getDb()
+  await db
+    .collection('bookings')
+    .updateMany({}, { $set: { expiresAt: new Date(0) } })
+  gate.release()
+  expect((await pending).status).toBe(409)
+  expect(
+    await db.collection('bookings').countDocuments({ status: 'confirmed' }),
+  ).toBe(0)
+})
+it('an acknowledged-on-server move retains locks and returns success', async () => {
+  const created = await (await call('bookings', input())).json()
+  const original = Collection.prototype.updateOne
+  const spy = vi
+    .spyOn(Collection.prototype, 'updateOne')
+    .mockImplementation(async function (this: Collection, ...args: unknown[]) {
+      const result = await Reflect.apply(original, this, args)
+      if (
+        this.collectionName === 'bookings' &&
+        (args[1] as { $set?: { eventSync?: boolean } }).$set?.eventSync
+      )
+        throw Error('lost acknowledgement')
+      return result
+    } as never)
+  try {
+    expect(
+      (
+        await call(
+          'reschedule',
+          { start: new Date(+start + 86400000).toISOString() },
+          created.manageUrl.split('/').pop(),
+        )
+      ).status,
+    ).toBe(200)
+    await assertInvariants()
+  } finally {
+    spy.mockRestore()
+  }
+})
+it('availability uses bounded current and previous range index scans', async () => {
+  const db = await client.getDb()
+  const created = await (await call('bookings', input())).json()
+  const source = await db
+    .collection('bookings')
+    .findOne({ _id: new ObjectId(created.id) })
+  await db.collection('bookings').insertMany(
+    Array.from({ length: 2000 }, (_, i) => ({
+      ...source,
+      _id: new ObjectId(),
+      manageTokenHash: `past${i}`,
+      start: new Date(0),
+      end: new Date(3600000),
+      prevStart: new Date(0),
+      prevEnd: new Date(3600000),
+    })),
+  )
+  let examined: number | undefined
+  const original = Collection.prototype.find
+  const spy = vi
+    .spyOn(Collection.prototype, 'find')
+    .mockImplementation(function (this: Collection, ...args: unknown[]) {
+      const cursor = Reflect.apply(original, this, args)
+      if (
+        this.collectionName === 'bookings' &&
+        ((args[0] as { $or?: unknown }).$or ||
+          (args[0] as { capManaged?: unknown }).capManaged)
+      ) {
+        const toArray = cursor.toArray.bind(cursor)
+        cursor.toArray = async () => {
+          const plan = await Reflect.apply(original, this, args).explain(
+            'executionStats',
+          )
+          examined = plan.executionStats.totalDocsExamined
+          return toArray()
+        }
+      }
+      return cursor
+    } as never)
+  try {
+    await call('slots', undefined, undefined, {})
+    // Directly invoke the shared availability path with a valid date range.
+    await (
+      await import('../bookings/service')
+    ).availableSlots(
+      business,
+      String(service),
+      { from: iso.slice(0, 10), to: iso.slice(0, 10) },
+      'UTC',
+    )
+    expect(examined).toBeDefined()
+    expect(examined).toBeLessThan(10)
+    examined = undefined
+    await (
+      await import('../bookings/capacity')
+    ).reserveCapacity(
+      source as unknown as import('../bookings/repository').BookingDoc,
+      'explain-cap',
+      start,
+      'UTC',
+      2,
+    )
+    expect(examined).toBeDefined()
+    expect(examined).toBeLessThan(10)
+  } finally {
+    spy.mockRestore()
+  }
+})
+
+async function staleClaimInterleaving() {
+  const db = await client.getDb()
+  const created = await (await call('bookings', input())).json()
+  const id = new ObjectId(created.id)
+  await db
+    .collection('bookings')
+    .updateOne(
+      { _id: id },
+      { $set: { pendingOp: { opId: 'stale', startedAt: new Date(0) } } },
+    )
+  let clearReady!: () => void, clearResume!: () => void
+  const ready = new Promise<void>((r) => {
+    clearReady = r
+  })
+  const paused = new Promise<void>((r) => {
+    clearResume = r
+  })
+  const original = Collection.prototype.updateOne
+  let held = false
+  const spy = vi
+    .spyOn(Collection.prototype, 'updateOne')
+    .mockImplementation(async function (this: Collection, ...args: unknown[]) {
+      if (
+        !held &&
+        this.collectionName === 'bookings' &&
+        (args[1] as { $unset?: { pendingOp?: string } }).$unset?.pendingOp ===
+          '' &&
+        !(args[1] as { $set?: { start?: Date } }).$set?.start
+      ) {
+        held = true
+        clearReady()
+        await paused
+      }
+      return Reflect.apply(original, this, args)
+    } as never)
+  let locksReady!: () => void, locksResume!: () => void
+  const lr = new Promise<void>((r) => {
+    locksReady = r
+  })
+  const lp = new Promise<void>((r) => {
+    locksResume = r
+  })
+  const insert = Collection.prototype.insertMany
+  const insertSpy = vi
+    .spyOn(Collection.prototype, 'insertMany')
+    .mockImplementation(async function (this: Collection, ...args: unknown[]) {
+      const result = await Reflect.apply(insert, this, args)
+      if (this.collectionName === 'slot_locks') {
+        locksReady()
+        await lp
+      }
+      return result
+    } as never)
+  try {
+    const sweeping = sweep()
+    await ready
+    const moving = call(
+      'reschedule',
+      { start: new Date(+start + 86400000).toISOString() },
+      created.manageUrl.split('/').pop(),
+    )
+    await lr
+    const before = await db.collection('bookings').findOne({ _id: id })
+    clearResume()
+    await sweeping
+    expect(
+      (await db.collection('bookings').findOne({ _id: id }))!.pendingOp,
+    ).toEqual(before!.pendingOp)
+    locksResume()
+    expect((await moving).status).toBe(200)
+    await assertInvariants()
+  } finally {
+    clearResume()
+    locksResume()
+    spy.mockRestore()
+    insertSpy.mockRestore()
+  }
+}
+it(
+  'stale pendingOp cleanup cannot clear the claim of a newer stalled move',
+  staleClaimInterleaving,
+)
+
+it('a create inserting locks after expiry cleanup releases its own late locks', async () => {
+  const db = await client.getDb()
+  let ready!: () => void, resume!: () => void
+  const reached = new Promise<void>((r) => {
+      ready = r
+    }),
+    wait = new Promise<void>((r) => {
+      resume = r
+    })
+  const original = Collection.prototype.insertMany
+  const spy = vi
+    .spyOn(Collection.prototype, 'insertMany')
+    .mockImplementation(async function (this: Collection, ...args: unknown[]) {
+      if (this.collectionName === 'slot_locks') {
+        ready()
+        await wait
+      }
+      return Reflect.apply(original, this, args)
+    } as never)
+  try {
+    const pending = call('bookings', input())
+    await reached
+    await db
+      .collection('bookings')
+      .updateMany({}, { $set: { expiresAt: new Date(0) } })
+    await sweep()
+    resume()
+    expect((await pending).status).toBe(409)
+    expect(await db.collection('slot_locks').countDocuments()).toBe(0)
+  } finally {
+    resume()
+    spy.mockRestore()
+  }
+})
+it('cancel retries a revision bumped by a concurrent lease', async () => {
+  const created = await (await call('bookings', input())).json()
+  const original = Collection.prototype.updateOne
+  let bumped = false
+  const spy = vi
+    .spyOn(Collection.prototype, 'updateOne')
+    .mockImplementation(async function (this: Collection, ...args: unknown[]) {
+      if (
+        !bumped &&
+        this.collectionName === 'bookings' &&
+        (args[1] as { $set?: { status?: string } }).$set?.status === 'cancelled'
+      ) {
+        bumped = true
+        await Reflect.apply(original, this, [
+          { _id: new ObjectId(created.id) },
+          { $inc: { rev: 1 }, $set: { syncAt: new Date() } },
+        ])
+      }
+      return Reflect.apply(original, this, args)
+    } as never)
+  try {
+    expect(
+      (await call('cancel', {}, created.manageUrl.split('/').pop())).status,
+    ).toBe(200)
+  } finally {
+    spy.mockRestore()
+  }
+})
+it('ended bookings are marked after releasing both lock collections', async () => {
+  const db = await client.getDb()
+  const created = await (await call('bookings', input())).json()
+  await db
+    .collection('bookings')
+    .updateOne(
+      { _id: new ObjectId(created.id) },
+      { $set: { end: new Date(0) } },
+    )
+  await sweep()
+  expect(
+    (await db
+      .collection('bookings')
+      .findOne({ _id: new ObjectId(created.id) }))!.locksReleased,
+  ).toBe(true)
+  expect(await db.collection('slot_locks').countDocuments()).toBe(0)
+})
+
+it('a move stalled after locks loses after its expired claim is swept and another customer books', async () => {
+  const db = await client.getDb()
+  const created = await (await call('bookings', input())).json()
+  const id = new ObjectId(created.id),
+    target = new Date(+start + 86400000).toISOString()
+  let ready!: () => void, resume!: () => void
+  const reached = new Promise<void>((r) => {
+      ready = r
+    }),
+    wait = new Promise<void>((r) => {
+      resume = r
+    })
+  const original = Collection.prototype.insertMany
+  let held = false
+  const spy = vi
+    .spyOn(Collection.prototype, 'insertMany')
+    .mockImplementation(async function (this: Collection, ...args: unknown[]) {
+      const result = await Reflect.apply(original, this, args)
+      if (!held && this.collectionName === 'slot_locks') {
+        held = true
+        ready()
+        await wait
+      }
+      return result
+    } as never)
+  try {
+    const moving = call(
+      'reschedule',
+      { start: target },
+      created.manageUrl.split('/').pop(),
+    )
+    await reached
+    await db
+      .collection('bookings')
+      .updateOne({ _id: id }, { $set: { 'pendingOp.startedAt': new Date(0) } })
+    await db
+      .collection('slot_locks')
+      .updateMany({ bookingId: id }, { $set: { createdAt: new Date(0) } })
+    await sweep()
+    const other = await call('bookings', input(target))
+    expect(other.status).toBe(201)
+    resume()
+    expect((await moving).status).toBe(409)
+    await assertInvariants()
+  } finally {
+    resume()
+    spy.mockRestore()
+  }
+})
+it('create refuses Google when the expiry reserve has been consumed before acquisition finishes', async () => {
+  let clock: ReturnType<typeof vi.spyOn> | undefined
+  const original = Collection.prototype.insertMany
+  const spy = vi
+    .spyOn(Collection.prototype, 'insertMany')
+    .mockImplementation(async function (this: Collection, ...args: unknown[]) {
+      const result = await Reflect.apply(original, this, args)
+      if (this.collectionName === 'slot_locks')
+        clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 130000)
+      return result
+    } as never)
+  try {
+    expect((await call('bookings', input())).status).toBe(502)
+    expect(state.operations.filter((o) => o.kind === 'create')).toHaveLength(0)
+  } finally {
+    clock?.mockRestore()
+    spy.mockRestore()
+  }
+})
+
+it('reconcile restores a deleted Google tombstone with confirmed status', async () => {
+  const created = await (await call('bookings', input())).json()
+  const { FakeCalendarProvider } = await import('../calendar/fake')
+  await new FakeCalendarProvider(String(account)).deleteEvent(
+    'primary',
+    created.id,
+  )
+  expect(state.events[created.id]!.event.status).toBe('cancelled')
+  expect(
+    (
+      await call(
+        'reschedule',
+        { start: new Date(+start + 86400000).toISOString() },
+        created.manageUrl.split('/').pop(),
+      )
+    ).status,
+  ).toBe(200)
+  expect(state.events[created.id]!.event.status).toBe('confirmed')
+  expect(state.events[created.id]!.event.start.dateTime).toBe(
+    new Date(+start + 86400000).toISOString(),
+  )
+})
+it('an unpatchable 410 keeps sync intent and backs off instead of freeing previous locks', async () => {
+  const db = await client.getDb()
+  const created = await (await call('bookings', input())).json()
+  const { FakeCalendarProvider } = await import('../calendar/fake')
+  const { CalendarError } = await import('../calendar/types')
+  const spy = vi
+    .spyOn(FakeCalendarProvider.prototype, 'updateEvent')
+    .mockRejectedValue(new CalendarError(410))
+  try {
+    expect(
+      (
+        await call(
+          'reschedule',
+          { start: new Date(+start + 86400000).toISOString() },
+          created.manageUrl.split('/').pop(),
+        )
+      ).status,
+    ).toBe(200)
+    const b = await db
+      .collection('bookings')
+      .findOne({ _id: new ObjectId(created.id) })
+    expect(b!.eventSync).toBe(true)
+    expect(+b!.retryAt).toBeGreaterThan(Date.now())
+    expect(
+      await db.collection('slot_locks').countDocuments({ opId: b!.prevOpId }),
+    ).toBe(12)
+    expect(spy).toHaveBeenCalledTimes(2)
+    await sweep()
+    expect(spy).toHaveBeenCalledTimes(2)
+  } finally {
+    spy.mockRestore()
+  }
+})
+it('purge work backs off missing businesses and rotates to live tenants', async () => {
+  const db = await client.getDb()
+  const created = await (await call('bookings', input())).json()
+  const source = await db
+    .collection('bookings')
+    .findOne({ _id: new ObjectId(created.id) })
+  await db.collection('bookings').insertMany(
+    Array.from({ length: 50 }, (_, i) => ({
+      ...source,
+      _id: new ObjectId(),
+      businessId: new ObjectId(),
+      manageTokenHash: `purge${i}`,
+      status: 'cancelled',
+      purgeAfter: new Date(0),
+      syncAt: new Date(0),
+    })),
+  )
+  await db
+    .collection('bookings')
+    .updateOne(
+      { _id: source!._id },
+      { $set: { status: 'cancelled', purgeAfter: new Date(0) } },
+    )
+  await sweep()
+  await sweep()
+  expect(
+    (await db.collection('bookings').findOne({ _id: source!._id }))!.purgeAfter,
+  ).toBeUndefined()
+  expect(
+    await db
+      .collection('bookings')
+      .countDocuments({ retryAt: { $gt: new Date() } }),
+  ).toBe(50)
+})
+
+it('confirmation applied late before abandonment loses keeps its event and locks', async () => {
+  const original = Collection.prototype.updateOne
+  let late: unknown[] | undefined
+  const spy = vi
+    .spyOn(Collection.prototype, 'updateOne')
+    .mockImplementation(async function (this: Collection, ...args: unknown[]) {
+      const set = (
+        args[1] as { $set?: { status?: string; abandoned?: boolean } }
+      ).$set
+      if (this.collectionName === 'bookings' && set?.status === 'confirmed') {
+        late = args
+        throw Error(
+          'confirmation acknowledgement lost before server application',
+        )
+      }
+      if (this.collectionName === 'bookings' && set?.abandoned && late) {
+        await Reflect.apply(original, this, late)
+        late = undefined
+      }
+      return Reflect.apply(original, this, args)
+    } as never)
+  try {
+    expect((await call('bookings', input())).status).toBe(201)
+    expect(Object.keys(activeEvents())).toHaveLength(1)
+    expect(
+      await (await client.getDb()).collection('slot_locks').countDocuments(),
+    ).toBe(12)
+  } finally {
+    spy.mockRestore()
+  }
+})
+
+it('a move applied after the first recovery read keeps its new locks', async () => {
+  const created = await (await call('bookings', input())).json()
+  const original = Collection.prototype.updateOne
+  let late: unknown[] | undefined
+  const spy = vi
+    .spyOn(Collection.prototype, 'updateOne')
+    .mockImplementation(async function (this: Collection, ...args: unknown[]) {
+      const write = args[1] as {
+        $set?: { eventSync?: boolean }
+        $unset?: { pendingOp?: string }
+      }
+      if (this.collectionName === 'bookings' && write.$set?.eventSync) {
+        late = args
+        throw Error('move applied late')
+      }
+      if (
+        this.collectionName === 'bookings' &&
+        write.$unset?.pendingOp === '' &&
+        late
+      ) {
+        await Reflect.apply(original, this, late)
+        late = undefined
+      }
+      return Reflect.apply(original, this, args)
+    } as never)
+  try {
+    expect(
+      (
+        await call(
+          'reschedule',
+          { start: new Date(+start + 86400000).toISOString() },
+          created.manageUrl.split('/').pop(),
+        )
+      ).status,
+    ).toBe(200)
+    await assertInvariants()
+  } finally {
+    spy.mockRestore()
+  }
+})
+
+it('keeps the cap lock and event of a booking whose confirm reply was lost and which was then moved', async () => {
+  // The confirm write is applied but its reply is lost, the customer moves
+  // the booking with the manage link from the invitation, and the create
+  // request's recovery read fails. The create path must not treat the moved
+  // booking (now under another operation id) as a dead attempt.
+  const db = await client.getDb()
+  await db
+    .collection('services')
+    .updateOne({ _id: service }, { $set: { maxPerDay: 3 } })
+  const originalUpdate = Collection.prototype.updateOne
+  const originalFind = Collection.prototype.findOne
+  let held = false
+  let failNextRead = false
+  vi.spyOn(Collection.prototype, 'findOne').mockImplementation(async function (
+    this: Collection,
+    ...args: unknown[]
+  ) {
+    if (failNextRead && this.collectionName === 'bookings') {
+      failNextRead = false
+      throw Error('read lost')
+    }
+    return Reflect.apply(originalFind, this, args)
+  } as never)
+  vi.spyOn(Collection.prototype, 'updateOne').mockImplementation(
+    async function (this: Collection, ...args: unknown[]) {
+      const set = (args[1] as { $set?: { status?: string } }).$set
+      if (
+        !held &&
+        this.collectionName === 'bookings' &&
+        set?.status === 'confirmed'
+      ) {
+        held = true
+        await Reflect.apply(originalUpdate, this, args)
+        const invitation = Object.values(state.events)[0]!.event
+        const token = invitation.description!.split('/m/').pop()!
+        const moved = await call(
+          'reschedule',
+          { start: new Date(+start + 3 * 3600000).toISOString() },
+          token,
+        )
+        expect(moved.status).toBe(200)
+        failNextRead = true
+        throw Error('reply lost')
+      }
+      return Reflect.apply(originalUpdate, this, args)
+    } as never,
+  )
+  const response = await call('bookings', input())
+  vi.restoreAllMocks()
+
+  expect(response.status).toBe(201)
+  const booking = (await db.collection('bookings').findOne({}))!
+  expect(booking.status).toBe('confirmed')
+  expect(
+    await db.collection('cap_locks').countDocuments({ opId: booking.capOpId }),
+  ).toBe(1)
+  expect(
+    await db.collection('slot_locks').countDocuments({ opId: booking.opId }),
+  ).toBe(12)
+  expect(Object.keys(activeEvents())).toHaveLength(1)
 })

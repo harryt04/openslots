@@ -22,6 +22,13 @@ it('refuses booking writes without the unique slot lock index and logs a clear d
       .createIndex({ businessId: 1, block: 1 }, { unique: true })
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000)
     try {
+      await expect(guardLocks()).rejects.toMatchObject({
+        code: 'internal_error',
+      })
+      await db
+        .collection('cap_locks')
+        .createIndex({ businessId: 1, capKey: 1 }, { unique: true })
+      clock.mockReturnValue(Date.now() + 31000)
       await expect(guardLocks()).resolves.toBeUndefined()
     } finally {
       clock.mockRestore()

@@ -50,3 +50,18 @@ References: [Better Auth Google](https://www.better-auth.com/docs/authentication
 - Remove the selected calendar or change it to read-only, then Refresh. Confirm the destination moves and the save message explains it. With no healthy writable calendar, confirm No booking calendar on Calendars and Bookings and no availability. Unlink the last account and confirm the same state.
 - Real account records have no email field. Read the verified email claim from the Google id token stored by Better Auth's validated OAuth exchange. For older accounts without that token, use the primary calendar's name (or Google account), never the owner's email. Fake accounts have explicit fixture emails. Validate the real secondary identity label manually; this has not been tested live.
 - Better Auth 1.7.25 `dist/api/routes/callback.mjs` invokes `linkOAuthAccount`; `dist/oauth2/link-account.mjs` calls `assertValidUserInfo` with the fresh linked identity and action `link-account` before account creation/update. The handler test now exercises refusal of a second identity outside the allowlist.
+
+## Slice 3A tombstones and restore (manual, not verified locally)
+
+1. On a disposable calendar, insert a deterministic event id, then delete it.
+2. Read it with showDeleted and confirm Google retains status cancelled.
+3. Insert the same id and record whether Google returns 409 duplicate.
+4. PATCH that id with status confirmed and new start/end; confirm it restores,
+   retains the id, moves to the new time and sends the expected attendee update.
+5. Record 404/410 versus successful PATCH behaviour for a permanently removed
+   event. Verify create followed by confirmed PATCH converges, or that the
+   booking retains eventSync and retries with backoff when restoration fails.
+6. Cancel while a missing-event reconcile is paused; confirm no later recreation
+   occurs after cancellation is observed or the provider deadline passes.
+
+Do not paste calendar ids, attendee details or OAuth credentials into the PR.

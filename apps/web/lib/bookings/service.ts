@@ -39,26 +39,30 @@ export async function guardLocks() {
     throw new ApiFailure('internal_error')
   lockGuard ??= (async () => {
     try {
-      const indexes = await (
-        await getDb()
-      )
-        .collection('slot_locks')
-        .listIndexes()
-        .toArray()
-      if (
-        !indexes.some(
-          (i) =>
-            i.unique &&
-            !i.partialFilterExpression &&
-            !i.sparse &&
-            JSON.stringify(i.key) ===
-              JSON.stringify({ businessId: 1, block: 1 }),
+      for (const [collection, key] of [
+        ['slot_locks', { businessId: 1, block: 1 }],
+        ['cap_locks', { businessId: 1, capKey: 1 }],
+      ] as const) {
+        const indexes = await (
+          await getDb()
         )
-      )
-        throw Error('missing index')
+          .collection(collection)
+          .listIndexes()
+          .toArray()
+        if (
+          !indexes.some(
+            (i) =>
+              i.unique &&
+              !i.partialFilterExpression &&
+              !i.sparse &&
+              JSON.stringify(i.key) === JSON.stringify(key),
+          )
+        )
+          throw Error('missing index')
+      }
     } catch {
       console.error(
-        'OpenSlots booking refused: unique slot_locks {businessId, block} index missing. Run create-indexes.',
+        'OpenSlots booking refused: unique slot_locks or cap_locks index missing. Run create-indexes.',
       )
       throw new ApiFailure('internal_error')
     }
@@ -71,6 +75,8 @@ export async function guardLocks() {
     throw error
   }
 }
+const LEASE_MS = 180000
+const MARGIN_MS = 30000
 export const ATTEMPT_MS = 180_000
 async function calendarCall<T>(
   business: BusinessDoc,
@@ -130,25 +136,28 @@ export async function availableSlots(
     .find({
       businessId: business._id,
       ...(exclude ? { _id: { $ne: exclude } } : {}),
-      $and: [
+      $or: [
         {
-          $or: [
-            { status: 'confirmed' },
-            { status: 'pending', expiresAt: { $gt: new Date() } },
-            { cleanup: true },
-          ],
+          businessId: business._id,
+          start: { $gte: new Date(+from - 86400000), $lt: to },
+          end: { $gt: from },
         },
         {
-          $or: [
-            { start: { $lt: to }, end: { $gt: from } },
-            { prevStart: { $lt: to }, prevEnd: { $gt: from } },
-          ],
+          businessId: business._id,
+          prevStart: { $gte: new Date(+from - 86400000), $lt: to },
+          prevEnd: { $gt: from },
         },
       ],
     })
     .toArray()
   const counts: Record<string, number> = {}
   for (const b of existing) {
+    if (!(
+      b.status === 'confirmed' ||
+      (b.status === 'pending' && b.expiresAt && +b.expiresAt > Date.now()) ||
+      b.cleanup
+    ))
+      continue
     busy.push(occupiedInterval({ start: b.start, ...b.service }))
     if (b.prevOpId && b.prevStart)
       busy.push(occupiedInterval({ start: b.prevStart, ...b.service }))
@@ -307,7 +316,11 @@ export async function createBooking(
       calendarProvider({
         id: c.accountId,
         userId: business.ownerUserId,
-      }).createEvent(c.calendarId, event(business, b, result.manageUrl)),
+      }).createEvent(
+        c.calendarId,
+        event(business, b, result.manageUrl),
+        +b.expiresAt! - 60000,
+      ),
     )
     const confirmed = await cas(
       b,
@@ -322,9 +335,14 @@ export async function createBooking(
     if (!confirmed) throw new ApiFailure('slot_taken')
     return result
   } catch (error) {
+    // Only this request's confirm can ever make this booking `confirmed`, so
+    // a stored `confirmed` means the confirm was applied even though its
+    // reply was lost. That stays true after the customer has moved the
+    // booking (its `opId` is then another operation's): never compare
+    // `opId` here, or a booking that is live would have its cap lock and
+    // its calendar event deleted below.
     const current = await col.findOne({ _id: id })
-    if (current?.status === 'confirmed' && current.opId === b.opId)
-      return result
+    if (current && wasConfirmed(current)) return result
     if (
       await cas(b, {
         status: 'cancelled',
@@ -336,9 +354,27 @@ export async function createBooking(
       await reconcile(id)
     // A lost confirmation may have landed in Google after another owner cleaned
     // the tombstone. Delete again without touching another operation's locks.
-    else await deleteEvent(b, business).catch(() => {})
+    else {
+      const settled = await col.findOne({ _id: id })
+      if (settled && wasConfirmed(settled)) return result
+      // Release only when the attempt is certainly dead: its document is
+      // gone or is an abandoned tombstone. Anything else is left to the
+      // sweep, which errs on the side of keeping the time held.
+      if (!settled || settled.abandoned) {
+        await release(b.opId)
+        await deleteEvent(b, business).catch(() => {})
+      }
+    }
     throw error
   }
+}
+/**
+ * True when a booking's create was confirmed at some point: it is confirmed
+ * now, or it was confirmed and the customer or owner has since cancelled it.
+ * An attempt that never confirmed ends as an `abandoned` tombstone instead.
+ */
+function wasConfirmed(b: BookingDoc): boolean {
+  return b.status === 'confirmed' || (b.status === 'cancelled' && !b.abandoned)
 }
 export async function manageBooking(businessId: ObjectId, token: string) {
   const b = await (
@@ -379,19 +415,30 @@ async function cas(
   unset: Record<string, ''> = {},
   extra = {},
 ) {
-  const result = await (
-    await bookings()
-  ).updateOne(
-    { _id: b._id, rev: b.rev, ...extra },
-    {
-      $set: { ...set, updatedAt: new Date() },
-      $inc: { rev: 1 },
-      ...(Object.keys(unset).length ? { $unset: unset } : {}),
-    },
-  )
-  return result.matchedCount === 1
+  const writeId = crypto.randomUUID()
+  try {
+    const result = await (
+      await bookings()
+    ).updateOne(
+      { _id: b._id, rev: b.rev, ...extra },
+      {
+        $set: { ...set, lastWriteId: writeId, updatedAt: new Date() },
+        $inc: { rev: 1 },
+        ...(Object.keys(unset).length ? { $unset: unset } : {}),
+      },
+    )
+    return result.matchedCount === 1
+  } catch (error) {
+    const current = await (await bookings()).findOne({ _id: b._id })
+    if (current?.lastWriteId === writeId) return true
+    throw error
+  }
 }
-async function deleteEvent(b: BookingDoc, business: BusinessDoc) {
+async function deleteEvent(
+  b: BookingDoc,
+  business: BusinessDoc,
+  notAfter?: number,
+) {
   if (!b.calendar) throw new ApiFailure('calendar_unavailable')
   const c = b.calendar
   try {
@@ -401,30 +448,34 @@ async function deleteEvent(b: BookingDoc, business: BusinessDoc) {
     }).deleteEvent(
       c.calendarId,
       b.googleEventId ?? eventIdForBooking(String(b._id)),
+      notAfter,
     )
   } catch (e) {
     if (e instanceof CalendarError && [404, 410].includes(e.status)) return
     throw e
   }
 }
-/** Revision lease prevents concurrent reconciles. A stale Google patch cannot be
- * fenced: after losing its revision, it must never unlock or clear sync intent. */
+/** The provider deadline fences sends before lease expiry. Revision ownership
+ * still fences lock release and clearing sync intent after an in-flight call. */
 export async function reconcile(id: ObjectId) {
   const col = await bookings()
   let b = await col.findOne({ _id: id })
   if (!b || (!b.cleanup && !b.eventSync)) return
-  if (b.syncAt && +b.syncAt > Date.now() - 120000) return
-  if (!(await cas(b, { syncAt: new Date() }))) return
+  if (b.syncAt && +b.syncAt > Date.now() - LEASE_MS) return
+  if (b.retryAt && +b.retryAt > Date.now()) return
+  const leaseStart = Date.now()
+  const notAfter = leaseStart + LEASE_MS - MARGIN_MS
+  if (!(await cas(b, { syncAt: new Date(leaseStart) }))) return
   b = (await col.findOne({ _id: id, rev: b.rev + 1 }))!
   if (!b) return
   const db = await getDb()
   const business = await db
     .collection<BusinessDoc>('businesses')
     .findOne({ _id: b.businessId })
-  if (!business) return
   try {
+    if (!business) throw new CalendarError(503)
     if (b.status === 'cancelled' && b.cleanup) {
-      await deleteEvent(b, business)
+      await deleteEvent(b, business, notAfter)
       await db.collection('slot_locks').deleteMany({ bookingId: id })
       await db.collection('cap_locks').deleteMany({ bookingId: id })
       await cas(
@@ -433,6 +484,8 @@ export async function reconcile(id: ObjectId) {
         {
           cleanup: '',
           syncAt: '',
+          retryAt: '',
+          retryCount: '',
           eventSync: '',
           prevOpId: '',
           prevStart: '',
@@ -452,13 +505,22 @@ export async function reconcile(id: ObjectId) {
         await provider.updateEvent(
           c.calendarId,
           b.googleEventId ?? payload.id,
-          payload,
+          { ...payload, status: 'confirmed' },
+          notAfter,
         )
       } catch (e) {
-        if (!(e instanceof CalendarError && e.status === 404)) throw e
+        if (!(e instanceof CalendarError && [404, 410].includes(e.status)))
+          throw e
         if (!(await col.findOne({ _id: id, rev: b.rev, status: 'confirmed' })))
           return
-        await provider.createEvent(c.calendarId, payload)
+        await provider.createEvent(c.calendarId, payload, notAfter)
+        // A duplicate insert may refer to a cancelled Google tombstone.
+        await provider.updateEvent(
+          c.calendarId,
+          b.googleEventId ?? payload.id!,
+          { ...payload, status: 'confirmed' },
+          notAfter,
+        )
       }
       // Cancellation may have won while Google was in flight. Never unlock on
       // a stale snapshot; leave reconciliation intent for its new owner.
@@ -478,40 +540,53 @@ export async function reconcile(id: ObjectId) {
           prevEnd: '',
           prevCapOpId: '',
           syncAt: '',
+          retryAt: '',
+          retryCount: '',
         },
       )
     }
   } catch (e) {
     if (e instanceof CalendarAuthError)
       await markNeedsReconnect(b.businessId, b.calendar!.accountId)
-    await cas(b, {}, { syncAt: '' })
+    await cas(b, {
+      retryCount: (b.retryCount ?? 0) + 1,
+      retryAt: new Date(
+        Date.now() +
+          Math.min(3600000, 60000 * 2 ** Math.min(b.retryCount ?? 0, 6)),
+      ),
+    })
   }
 }
 export async function cancelBooking(business: BusinessDoc, id: ObjectId) {
   const col = await bookings()
-  const b = await col.findOne({
-    _id: id,
-    businessId: business._id,
-    abandoned: { $ne: true },
-  })
-  if (!b) throw new ApiFailure('not_found')
-  if (b.status === 'cancelled') return b
-  if (b.status !== 'confirmed' || +b.start <= Date.now())
-    throw new ApiFailure('booking_not_changeable')
-  if (
-    !(await cas(
-      b,
-      {
-        status: 'cancelled',
-        cleanup: true,
-        purgeAfter: new Date(Date.now() + 3600000),
-      },
-      { pendingOp: '' },
-    ))
-  )
-    throw new ApiFailure('slot_taken')
-  await reconcile(id)
-  return (await col.findOne({ _id: id }))!
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const b = await col.findOne({
+      _id: id,
+      businessId: business._id,
+      abandoned: { $ne: true },
+    })
+    if (!b) throw new ApiFailure('not_found')
+    if (b.status === 'cancelled') return b
+    if (b.status !== 'confirmed' || +b.start <= Date.now())
+      throw new ApiFailure('booking_not_changeable')
+    if (
+      !(await cas(
+        b,
+        {
+          status: 'cancelled',
+          cleanup: true,
+          purgeAfter: new Date(Date.now() + 3600000),
+        },
+        // A cancellation should not wait out a backoff left by an earlier
+        // failed calendar update of this booking.
+        { pendingOp: '', retryAt: '', retryCount: '' },
+      ))
+    )
+      continue
+    await reconcile(id)
+    return (await col.findOne({ _id: id }))!
+  }
+  throw new ApiFailure('slot_taken')
 }
 export async function rescheduleBooking(
   business: BusinessDoc,
@@ -601,14 +676,18 @@ export async function rescheduleBooking(
     )
       throw new ApiFailure('slot_taken')
   } catch (e) {
-    const current = await col.findOne({ _id: id })
-    if (current?.opId !== opId) {
+    let current = await col.findOne({ _id: id })
+    if (!current) throw e
+    if (current.opId !== opId) {
       await cas(claimed, {}, { pendingOp: '' })
-      await release(opId)
+      current = await col.findOne({ _id: id })
+      if (!current) throw e
+      if (current.opId !== opId) {
+        await release(opId)
+        throw e
+      }
     }
-    // An ambiguous acknowledgement can follow a committed write. Retain its
-    // locks and durable sync intent; a sweep will finish it.
-    throw e
+    // Stored committed move is success even if its acknowledgement was lost.
   }
   await reconcile(id)
   const current = await col.findOne({ _id: id })
@@ -643,7 +722,11 @@ export async function sweepAbandoned() {
       await reconcile(b._id)
   }
   for (const b of await col
-    .find({ $or: [{ cleanup: true }, { eventSync: true }] })
+    .find({
+      $or: [{ cleanup: true }, { eventSync: true }],
+      ...sweepEligible(now),
+    })
+    .sort({ syncAt: 1, _id: 1 })
     .limit(batch)
     .toArray())
     await reconcile(b._id)
@@ -655,20 +738,30 @@ export async function sweepAbandoned() {
   for (const b of await col
     .find({
       purgeAfter: { $lte: now },
+      ...sweepEligible(now),
       status: 'cancelled',
       cleanup: { $ne: true },
     })
+    .sort({ syncAt: 1, _id: 1 })
     .limit(batch)
     .toArray()) {
     const business = await db
       .collection<BusinessDoc>('businesses')
       .findOne({ _id: b.businessId })
-    if (!business) continue
+    if (!(await cas(b, { syncAt: now }))) continue
+    const claimed = { ...b, rev: b.rev + 1 }
     try {
-      await deleteEvent(b, business)
-      if (b.abandoned) await col.deleteOne({ _id: b._id, rev: b.rev })
-      else await cas(b, {}, { purgeAfter: '' })
+      if (!business) throw new CalendarError(503)
+      await deleteEvent(b, business, +now + LEASE_MS - MARGIN_MS)
+      if (b.abandoned) await col.deleteOne({ _id: b._id, rev: claimed.rev })
+      else await cas(claimed, {}, { purgeAfter: '', syncAt: '' })
     } catch (e) {
+      await cas(claimed, {
+        retryCount: (b.retryCount ?? 0) + 1,
+        retryAt: new Date(
+          +now + Math.min(3600000, 60000 * 2 ** Math.min(b.retryCount ?? 0, 6)),
+        ),
+      })
       if (e instanceof CalendarAuthError)
         await markNeedsReconnect(b.businessId, b.calendar!.accountId)
     }
@@ -704,16 +797,31 @@ export async function sweepAbandoned() {
         end: { $lt: new Date(+now - 86400000) },
         eventSync: { $ne: true },
         pendingOp: { $exists: false },
+        locksReleased: { $ne: true },
       })
-      .skip(sweepOffsets[name + ':ended'] ?? 0)
       .limit(batch)
       .toArray()
-    sweepOffsets[name + ':ended'] =
-      ended.length === batch ? (sweepOffsets[name + ':ended'] ?? 0) + batch : 0
-    for (const b of ended)
-      await db.collection(name).deleteMany({
-        bookingId: b._id,
-        opId: { $in: [b.opId, b.capOpId].filter(Boolean) },
-      })
+    for (const b of ended) {
+      for (const collection of ['slot_locks', 'cap_locks'])
+        await db.collection(collection).deleteMany({
+          bookingId: b._id,
+          opId: { $in: [b.opId, b.capOpId].filter(Boolean) },
+        })
+      await cas(b, { locksReleased: true })
+    }
+  }
+}
+
+function sweepEligible(now: Date) {
+  return {
+    $and: [
+      {
+        $or: [
+          { syncAt: { $exists: false } },
+          { syncAt: { $lte: new Date(+now - LEASE_MS) } },
+        ],
+      },
+      { $or: [{ retryAt: { $exists: false } }, { retryAt: { $lte: now } }] },
+    ],
   }
 }

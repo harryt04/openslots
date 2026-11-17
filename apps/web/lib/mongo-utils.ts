@@ -47,13 +47,15 @@ export const indexes: Record<CollectionName, IndexDescription[]> = {
   ],
   bookings: [
     { key: { status: 1, expiresAt: 1 } },
-    { key: { cleanup: 1 } },
-    { key: { eventSync: 1 } },
+    { key: { cleanup: 1, syncAt: 1, retryAt: 1 } },
+    { key: { eventSync: 1, syncAt: 1, retryAt: 1 } },
     { key: { 'pendingOp.startedAt': 1 } },
-    { key: { purgeAfter: 1 } },
-    { key: { status: 1, end: 1 } },
+    { key: { status: 1, purgeAfter: 1, syncAt: 1, retryAt: 1 } },
+    { key: { status: 1, locksReleased: 1, end: 1 } },
     { key: { businessId: 1, prevStart: 1, prevEnd: 1 } },
-    { key: { businessId: 1, serviceId: 1, status: 1, capManaged: 1 } },
+    {
+      key: { businessId: 1, serviceId: 1, status: 1, capManaged: 1, start: 1 },
+    },
     { key: { businessId: 1, start: 1 }, name: 'businessId_start' },
     {
       key: { manageTokenHash: 1 },

@@ -17,8 +17,11 @@ export class GoogleCalendarProvider implements CalendarProvider {
     path: string,
     method = 'GET',
     body?: unknown,
+    notAfter?: number,
   ): Promise<T> {
     const token = await this.token()
+    if (notAfter !== undefined && Date.now() >= notAfter)
+      throw new CalendarError(503)
     const response = await this.request(
       'https://www.googleapis.com/calendar/v3/' + path,
       {
@@ -105,12 +108,17 @@ export class GoogleCalendarProvider implements CalendarProvider {
       '?sendUpdates=all'
     )
   }
-  async createEvent(calendarId: string, event: CalendarEvent) {
+  async createEvent(
+    calendarId: string,
+    event: CalendarEvent,
+    notAfter?: number,
+  ) {
     try {
       return await this.call<{ id: string }>(
         this.path(calendarId),
         'POST',
         event,
+        notAfter,
       )
     } catch (error) {
       if (
@@ -123,12 +131,22 @@ export class GoogleCalendarProvider implements CalendarProvider {
       throw error
     }
   }
-  async updateEvent(calendarId: string, eventId: string, event: CalendarEvent) {
-    await this.call(this.path(calendarId, eventId), 'PATCH', event)
+  async updateEvent(
+    calendarId: string,
+    eventId: string,
+    event: CalendarEvent,
+    notAfter?: number,
+  ) {
+    await this.call(this.path(calendarId, eventId), 'PATCH', event, notAfter)
   }
-  async deleteEvent(calendarId: string, eventId: string) {
+  async deleteEvent(calendarId: string, eventId: string, notAfter?: number) {
     try {
-      await this.call(this.path(calendarId, eventId), 'DELETE')
+      await this.call(
+        this.path(calendarId, eventId),
+        'DELETE',
+        undefined,
+        notAfter,
+      )
     } catch (error) {
       if (error instanceof CalendarError && [404, 410].includes(error.status))
         return
