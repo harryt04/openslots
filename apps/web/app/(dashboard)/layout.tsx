@@ -1,3 +1,4 @@
+import { upcomingCount } from '@/lib/bookings/dashboard'
 import { listLinks } from '@/lib/calendar-links/repository'
 import { AppSidebar } from '@/components/custom/app-sidebar'
 import {
@@ -16,9 +17,10 @@ export default async function DashboardLayout({
 }) {
   // Redirects to /login, or to /onboarding when the user has no business.
   const { session, business, businesses } = await requireBusiness()
-  const [serviceCount, links] = await Promise.all([
+  const [serviceCount, links, bookingCount] = await Promise.all([
     countServices(business._id),
     listLinks(business._id),
+    upcomingCount(business._id),
   ])
   const calendarsNeedAttention = links.some(
     (l) => l.status === 'needs_reconnect',
@@ -38,6 +40,7 @@ export default async function DashboardLayout({
           user={{ name: session.user.name, email: session.user.email }}
           navMeta={{
             Services: { count: serviceCount },
+            Bookings: { count: bookingCount },
             Calendars: { attention: calendarsNeedAttention },
           }}
         />
