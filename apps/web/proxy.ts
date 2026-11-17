@@ -22,10 +22,22 @@ export function proxy(request: NextRequest) {
 
   const response = NextResponse.next()
   const embeddable = /^\/b\//.test(request.nextUrl.pathname)
+  const manage = request.nextUrl.pathname.startsWith('/m/')
+  // Public customer pages talk only to this origin: analytics hosts are not
+  // even allowed (TRD section 9).
+  const analytics =
+    embeddable || manage
+      ? ''
+      : ' https://us.i.posthog.com https://us-assets.i.posthog.com'
   response.headers.set(
     'Content-Security-Policy',
-    `default-src 'self'; script-src 'self' 'unsafe-inline' ${process.env.NODE_ENV === 'production' ? '' : "'unsafe-eval'"}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https://us.i.posthog.com https://us-assets.i.posthog.com; frame-ancestors ${embeddable ? '*' : request.nextUrl.pathname.startsWith('/m/') ? "'self'" : "'none'"}; base-uri 'self'; form-action 'self'; object-src 'none'`,
+    `default-src 'self'; script-src 'self' 'unsafe-inline' ${process.env.NODE_ENV === 'production' ? '' : "'unsafe-eval'"}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'${analytics}; frame-ancestors ${embeddable ? '*' : manage ? "'self'" : "'none'"}; base-uri 'self'; form-action 'self'; object-src 'none'`,
   )
+  if (manage) {
+    // The token in the URL is the credential.
+    response.headers.set('X-Robots-Tag', 'noindex, nofollow')
+    response.headers.set('Referrer-Policy', 'no-referrer')
+  }
   return response
 }
 
