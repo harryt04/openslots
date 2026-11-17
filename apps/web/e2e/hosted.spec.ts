@@ -36,7 +36,12 @@ async function customer(browser: Browser, baseURL: string | undefined) {
   page.on('request', (request) => {
     const url = new URL(request.url())
     if (!['http:', 'https:'].includes(url.protocol)) return
-    if (url.host !== new URL(baseURL ?? 'http://localhost').host) {
+    // PostHog is proxied through this origin at /ingest, so a request there
+    // is tracking even though it never leaves the host.
+    if (
+      url.host !== new URL(baseURL ?? 'http://localhost').host ||
+      url.pathname.startsWith('/ingest')
+    ) {
       outside.push(request.url())
     }
   })

@@ -45,3 +45,26 @@ describe('manage page formatting', () => {
     )
   })
 })
+
+describe('formatTimeSpan across a clock change', () => {
+  it('names the zone on each time when the clocks go back in between', () => {
+    // 1 November 2026 in Denver: 1:30 AM happens twice.
+    expect(
+      formatTimeSpan(
+        '2026-11-01T07:30:00Z',
+        '2026-11-01T08:30:00Z',
+        'America/Denver',
+      ),
+    ).toBe('1:30 AM MDT – 1:30 AM MST')
+  })
+
+  it('stays compact on an ordinary day', () => {
+    expect(
+      formatTimeSpan(
+        '2026-12-03T20:30:00Z',
+        '2026-12-03T21:30:00Z',
+        'America/Denver',
+      ),
+    ).toBe('1:30 – 2:30 PM')
+  })
+})

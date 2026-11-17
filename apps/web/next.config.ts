@@ -8,6 +8,12 @@ const nextConfig: NextConfig = {
     fetches: {
       fullUrl: true,
     },
+    // A manage link is a bearer credential: whoever has it can cancel the
+    // booking. Keep those paths out of the development request log. In
+    // production, redact them in the reverse proxy's access log as well.
+    incomingRequests: {
+      ignore: [/^\/m\//, /^\/api\/v1\/manage\//],
+    },
   },
   async rewrites() {
     return [

@@ -150,6 +150,7 @@ export function ManageBooking({
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<Problem | null>(null)
   const [moved, setMoved] = useState(false)
+  const cancelButton = useRef<HTMLButtonElement>(null)
   const [cancelOpen, setCancelOpen] = useState(false)
   const [picked, setPicked] = useState<SelectedSlot | null>(null)
   const [tz, setTz] = useState<string | null>(null)
@@ -470,7 +471,8 @@ export function ManageBooking({
             <CalendarDays aria-hidden="true" />
             <AlertTitle>Your booking has moved</AlertTitle>
             <AlertDescription>
-              The new time is shown above. The calendar has been updated.
+              The new time is shown above. Your calendar invitation will follow
+              it.
             </AlertDescription>
           </Alert>
         </div>
@@ -493,6 +495,7 @@ export function ManageBooking({
             Reschedule
           </Button>
           <Button
+            ref={cancelButton}
             variant="outline"
             disabled={busy}
             onClick={() => setCancelOpen(true)}
@@ -508,7 +511,7 @@ export function ManageBooking({
             <CalendarPlus aria-hidden="true" />
             <AlertTitle>This booking is cancelled</AlertTitle>
             <AlertDescription>
-              The time is free again. You can book another one.
+              You can book another time whenever you like.
             </AlertDescription>
           </Alert>
           <Button asChild>
@@ -526,7 +529,17 @@ export function ManageBooking({
       ) : null}
 
       <AlertDialog open={cancelOpen} onOpenChange={setCancelOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent
+          // The dialog is opened from state, not from a trigger, so put the
+          // keyboard focus back on the button it came from. After a
+          // cancellation that button is gone and the result heading takes it.
+          onCloseAutoFocus={(event) => {
+            if (cancelButton.current) {
+              event.preventDefault()
+              cancelButton.current.focus()
+            }
+          }}
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>Cancel this booking?</AlertDialogTitle>
             <AlertDialogDescription>

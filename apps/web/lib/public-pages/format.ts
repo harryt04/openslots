@@ -31,7 +31,29 @@ export function formatLongDate(iso: string, timeZone: string): string {
   }).format(new Date(iso))
 }
 
-/** "1:30 – 2:30 PM", or "11:30 AM – 12:30 PM" when the periods differ. */
+function offsetMinutes(iso: string, timeZone: string): string {
+  return (
+    new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' })
+      .formatToParts(new Date(iso))
+      .find((p) => p.type === 'timeZoneName')?.value ?? ''
+  )
+}
+
+function shortZone(iso: string, timeZone: string): string {
+  return (
+    new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'short' })
+      .formatToParts(new Date(iso))
+      .find((p) => p.type === 'timeZoneName')?.value ?? ''
+  )
+}
+
+/**
+ * "1:30 – 2:30 PM", or "11:30 AM – 12:30 PM" when the periods differ.
+ *
+ * When the clocks change between the start and the end, each time carries
+ * its zone abbreviation ("1:30 AM MDT – 1:30 AM MST"), because the plain
+ * wall-clock times would otherwise hide how long the booking is.
+ */
 export function formatTimeSpan(
   start: string,
   end: string,
@@ -39,6 +61,9 @@ export function formatTimeSpan(
 ): string {
   const a = timeParts(start, timeZone)
   const b = timeParts(end, timeZone)
+  if (offsetMinutes(start, timeZone) !== offsetMinutes(end, timeZone)) {
+    return `${a.time} ${a.period} ${shortZone(start, timeZone)} – ${b.time} ${b.period} ${shortZone(end, timeZone)}`
+  }
   return a.period === b.period
     ? `${a.time} – ${b.time} ${b.period}`
     : `${a.time} ${a.period} – ${b.time} ${b.period}`
