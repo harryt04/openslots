@@ -15,7 +15,6 @@ concurrency:
 env:
   BETTER_AUTH_SECRET: ci-secret-min-32-chars-long!!!!!!
   BETTER_AUTH_URL: http://localhost:3000
-  NEXT_PUBLIC_POSTHOG_KEY: phc_production_smoke_placeholder
   GOOGLE_CLIENT_ID: placeholder
   GOOGLE_CLIENT_SECRET: placeholder
   MONGO_CONNECTION_STRING: mongodb://localhost:27017
@@ -23,6 +22,8 @@ env:
 jobs:
   validate:
     name: Lint, typecheck, test, build
+    env:
+      NEXT_PUBLIC_POSTHOG_KEY: phc_production_smoke_placeholder
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
