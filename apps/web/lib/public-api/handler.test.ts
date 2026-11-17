@@ -2002,3 +2002,65 @@ it('a move applied after the first recovery read keeps its new locks', async () 
     spy.mockRestore()
   }
 })
+
+it('keeps the cap lock and event of a booking whose confirm reply was lost and which was then moved', async () => {
+  // The confirm write is applied but its reply is lost, the customer moves
+  // the booking with the manage link from the invitation, and the create
+  // request's recovery read fails. The create path must not treat the moved
+  // booking (now under another operation id) as a dead attempt.
+  const db = await client.getDb()
+  await db
+    .collection('services')
+    .updateOne({ _id: service }, { $set: { maxPerDay: 3 } })
+  const originalUpdate = Collection.prototype.updateOne
+  const originalFind = Collection.prototype.findOne
+  let held = false
+  let failNextRead = false
+  vi.spyOn(Collection.prototype, 'findOne').mockImplementation(async function (
+    this: Collection,
+    ...args: unknown[]
+  ) {
+    if (failNextRead && this.collectionName === 'bookings') {
+      failNextRead = false
+      throw Error('read lost')
+    }
+    return Reflect.apply(originalFind, this, args)
+  } as never)
+  vi.spyOn(Collection.prototype, 'updateOne').mockImplementation(
+    async function (this: Collection, ...args: unknown[]) {
+      const set = (args[1] as { $set?: { status?: string } }).$set
+      if (
+        !held &&
+        this.collectionName === 'bookings' &&
+        set?.status === 'confirmed'
+      ) {
+        held = true
+        await Reflect.apply(originalUpdate, this, args)
+        const invitation = Object.values(state.events)[0]!.event
+        const token = invitation.description!.split('/m/').pop()!
+        const moved = await call(
+          'reschedule',
+          { start: new Date(+start + 3 * 3600000).toISOString() },
+          token,
+        )
+        expect(moved.status).toBe(200)
+        failNextRead = true
+        throw Error('reply lost')
+      }
+      return Reflect.apply(originalUpdate, this, args)
+    } as never,
+  )
+  const response = await call('bookings', input())
+  vi.restoreAllMocks()
+
+  expect(response.status).toBe(201)
+  const booking = (await db.collection('bookings').findOne({}))!
+  expect(booking.status).toBe('confirmed')
+  expect(
+    await db.collection('cap_locks').countDocuments({ opId: booking.capOpId }),
+  ).toBe(1)
+  expect(
+    await db.collection('slot_locks').countDocuments({ opId: booking.opId }),
+  ).toBe(12)
+  expect(Object.keys(activeEvents())).toHaveLength(1)
+})

@@ -128,8 +128,7 @@ confirmation returns 201.
 
 Calendar failure or lost confirmation CAS transitions the pending revision to
 cancelled, abandoned, cleanup, with purgeAfter one hour away; reconcile inline.
-If that CAS loses after a read rules out confirmation, release only the create operation locks; delete the deterministic event again to catch
-a late create. Calendar failures return 502; lost confirmation returns 409.
+If that CAS loses, re-read the booking. Only this request's confirm can ever make the booking `confirmed`, so a stored `confirmed` (or a later, non-abandoned `cancelled`) means the confirm was applied and the request answers success, whatever `opId` the booking has by then: the customer may already have moved it. The create operation's locks are released and the deterministic event deleted again only when the document is gone or is an abandoned tombstone; anything else is left to the sweep. Calendar failures return 502; lost confirmation returns 409.
 Ambiguous database acknowledgements are re-read: an already confirmed creation
 is retained, and a thrown write is re-read using a unique lastWriteId; stored committed moves succeed. If a re-read fails, no locks are released and the sweep resolves the ambiguity.
 
@@ -139,7 +138,7 @@ Cancellation first CASes confirmed to cancelled with cleanup and purgeAfter one
 hour away, clearing pendingOp; nothing is deleted before this write. Run
 reconcile inline and return success even when cleanup remains. Already cancelled
 is an idempotent success. A live syncAt lease is preserved so cleanup cannot
-overtake an in-flight patch.
+overtake an in-flight patch. Any backoff left by an earlier failed calendar update is cleared, so the cancellation's own cleanup is attempted at once.
 
 Reschedule refuses pendingOp younger than two minutes and any eventSync,
 prevOpId or prevCapOpId with a try-again message. Occupied intervals including
@@ -228,6 +227,10 @@ Tombstones persist for an hour even after cleanup; late-delete also applies to
 normal cancellations. Known limit: a process dies between Google accepting a
 create and cleanup, and Google applies the write over an hour late.
 The fake checks deadlines after controllable pauses, retains cancelled tombstones, treats duplicate inserts as idempotent, and restores status on patch. A request already sent to Google cannot be fenced; arbitrarily delayed server application remains an external limit. Real tombstone behaviour needs the manual validation in google-validation.md.
+
+Cap admission counts all managed cap locks for the service/local date after insertion, including positions outside a lowered or restored cap. Excess admission removes only its own operation lock and returns 409. Concurrent over-admissions may both back off. Legacy reads are date-bounded before local-date filtering. Availability uses separate current/previous time branches with business and bounded start ranges (including one day for maximum buffered duration), served by their respective indexes.
+
+The backoff after a failed reconcile starts at one minute, but because the lease is kept on failure the first retry comes after about three. Cleanup selection is index-backed but reads every flagged booking each sweep, so its cost grows with the backlog.
 
 ## 6. Google integration
 
@@ -361,6 +364,3 @@ with window.location.href from the redirect response; it does not submit a form
 to Google. Keep form-action 'self'. Manage pages use frame-ancestors 'self';
 public booking pages remain embeddable.
 
-The gallery belongs to slice 3B and is absent from the slice 3A branch; the CSP smoke test currently checks its 404 response. Recheck the rendered gallery at integration.
-
-Cap admission counts all managed cap locks for the service/local date after insertion, including positions outside a lowered or restored cap. Excess admission removes only its own operation lock and returns 409. Concurrent over-admissions may both back off. Legacy reads are date-bounded before local-date filtering. Availability uses separate current/previous time branches with business and bounded start ranges (including one day for maximum buffered duration), served by their respective indexes.

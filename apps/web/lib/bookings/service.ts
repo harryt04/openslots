@@ -335,9 +335,14 @@ export async function createBooking(
     if (!confirmed) throw new ApiFailure('slot_taken')
     return result
   } catch (error) {
+    // Only this request's confirm can ever make this booking `confirmed`, so
+    // a stored `confirmed` means the confirm was applied even though its
+    // reply was lost. That stays true after the customer has moved the
+    // booking (its `opId` is then another operation's): never compare
+    // `opId` here, or a booking that is live would have its cap lock and
+    // its calendar event deleted below.
     const current = await col.findOne({ _id: id })
-    if (current?.status === 'confirmed' && current.opId === b.opId)
-      return result
+    if (current && wasConfirmed(current)) return result
     if (
       await cas(b, {
         status: 'cancelled',
@@ -351,13 +356,25 @@ export async function createBooking(
     // the tombstone. Delete again without touching another operation's locks.
     else {
       const settled = await col.findOne({ _id: id })
-      if (settled?.status === 'confirmed' && settled.opId === b.opId)
-        return result
-      await release(b.opId)
-      await deleteEvent(b, business).catch(() => {})
+      if (settled && wasConfirmed(settled)) return result
+      // Release only when the attempt is certainly dead: its document is
+      // gone or is an abandoned tombstone. Anything else is left to the
+      // sweep, which errs on the side of keeping the time held.
+      if (!settled || settled.abandoned) {
+        await release(b.opId)
+        await deleteEvent(b, business).catch(() => {})
+      }
     }
     throw error
   }
+}
+/**
+ * True when a booking's create was confirmed at some point: it is confirmed
+ * now, or it was confirmed and the customer or owner has since cancelled it.
+ * An attempt that never confirmed ends as an `abandoned` tombstone instead.
+ */
+function wasConfirmed(b: BookingDoc): boolean {
+  return b.status === 'confirmed' || (b.status === 'cancelled' && !b.abandoned)
 }
 export async function manageBooking(businessId: ObjectId, token: string) {
   const b = await (
@@ -560,7 +577,9 @@ export async function cancelBooking(business: BusinessDoc, id: ObjectId) {
           cleanup: true,
           purgeAfter: new Date(Date.now() + 3600000),
         },
-        { pendingOp: '' },
+        // A cancellation should not wait out a backoff left by an earlier
+        // failed calendar update of this booking.
+        { pendingOp: '', retryAt: '', retryCount: '' },
       ))
     )
       continue
