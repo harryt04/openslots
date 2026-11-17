@@ -19,7 +19,7 @@ test('the token sheet renders with Voltage colors in light and dark', async ({
 
 test('status badges never rely on color alone', async ({ page }) => {
   await page.goto('/dev/tokens')
-  for (const badge of await page.locator('[data-status]').all()) {
+  for (const badge of await page.locator('main [data-status]').all()) {
     const hasIcon = (await badge.locator('svg').count()) > 0
     const struck = await badge.evaluate((el) =>
       getComputedStyle(el).textDecorationLine.includes('line-through'),
@@ -98,4 +98,39 @@ test('sign-in, onboarding, creating and switching businesses', async ({
   await expect(
     page.getByText('Everything customers have booked with Shear Bliss Salon.'),
   ).toBeVisible()
+})
+
+test('login errors and fake calendar seeding', async ({ page, request }) => {
+  await page.goto('/login?error=EMAIL_NOT_ALLOWED')
+  await expect(page.locator('p[role=alert]')).toContainText('not allowed')
+  await page.goto('/login?error=access_denied')
+  await expect(page.locator('p[role=alert]')).toHaveText(
+    'Unable to sign in. Please try again.',
+  )
+  const seed = await request.put('/dev/calendar?accountId=e2e-google-account', {
+    data: {
+      busy: {
+        primary: [
+          { start: '2026-12-01T10:00:00Z', end: '2026-12-01T11:00:00Z' },
+        ],
+      },
+    },
+  })
+  expect(seed.ok()).toBeTruthy()
+  expect(
+    (
+      await (
+        await request.get('/dev/calendar?accountId=e2e-google-account')
+      ).json()
+    ).busy.primary,
+  ).toHaveLength(1)
+  for (const endpoint of [
+    'get-access-token',
+    'refresh-token',
+    'account-info',
+  ]) {
+    expect(
+      (await request.post('/api/auth/' + endpoint, { data: {} })).status(),
+    ).toBe(404)
+  }
 })
