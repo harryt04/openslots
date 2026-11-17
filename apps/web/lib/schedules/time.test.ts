@@ -96,3 +96,10 @@ describe('dates and zones', () => {
     expect(timeZoneLabel('Not/AZone')).toBe('Not/AZone')
   })
 })
+
+describe('review regression: 24:00 is only an end time', () => {
+  it('refuses 24:00 as a start instead of turning it into midnight', () => {
+    expect(parseTime('24:00', false).ok).toBe(false)
+    expect(parseTime('24:00', true)).toEqual({ ok: true, minutes: 1440 })
+  })
+})

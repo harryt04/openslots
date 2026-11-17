@@ -161,11 +161,13 @@ export function ScheduleEditor({ schedules }: { schedules: ScheduleView[] }) {
       setMessage('Fix the highlighted problems, then save again.')
       return
     }
+    const submitted = drafts[id]
     startTransition(async () => {
       const response = await saveScheduleAction(id, result.data)
       if (response.ok) {
         toast.success('Availability saved.')
-        setDrafts((all) => withoutKey(all, id))
+        // Keep the draft if it was edited again while the save was in flight.
+        setDrafts((all) => (all[id] === submitted ? withoutKey(all, id) : all))
         router.refresh()
         return
       }
@@ -204,15 +206,21 @@ export function ScheduleEditor({ schedules }: { schedules: ScheduleView[] }) {
   }
 
   function saveOverride(override: ScheduleOverride) {
-    const others = parsedOverrides.filter((o) => o.date !== override.date)
+    // Work on the draft itself, never on the parsed copy: while another field
+    // is invalid the parsed copy falls back to what is saved, and using it
+    // here would silently drop every other unsaved override.
+    const others = draft!.overrides.filter((o) => o.date !== override.date)
     edit({
-      overrides: sortOverrides([...others, override]).map((o) => ({
-        date: o.date,
-        ranges: o.ranges.map((r) => ({
-          start: formatTime(r.startMin),
-          end: formatTime(r.endMin),
-        })),
-      })),
+      overrides: sortOverrides([
+        ...others,
+        {
+          date: override.date,
+          ranges: override.ranges.map((r) => ({
+            start: formatTime(r.startMin),
+            end: formatTime(r.endMin),
+          })),
+        },
+      ]),
     })
   }
 

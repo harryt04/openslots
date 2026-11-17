@@ -48,7 +48,8 @@ export function parseTime(text: string, asEnd = false): ParsedTime {
     if (hour < 1 || hour > 12) return { ok: false }
     hour = (hour % 12) + (suffix.startsWith('p') ? 12 : 0)
   } else if (hour === 24 && minute === 0) {
-    return { ok: true, minutes: 1440 }
+    // 24:00 only makes sense as the end of a day.
+    return asEnd ? { ok: true, minutes: 1440 } : { ok: false }
   } else if (hour > 23) {
     return { ok: false }
   }

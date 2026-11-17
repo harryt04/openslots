@@ -72,3 +72,30 @@ describe('sortOverrides', () => {
     expect(input[0]?.date).toBe('2026-12-25')
   })
 })
+
+describe('review regression: usual hours means the same times', () => {
+  it('is not usual hours when the same total covers different times', () => {
+    const lunchGap = Array.from({ length: 7 }, () => [
+      { startMin: 9 * 60, endMin: 12 * 60 },
+      { startMin: 13 * 60, endMin: 18 * 60 },
+    ])
+    expect(
+      overrideKind(
+        { date: '2026-12-24', ranges: [{ startMin: 9 * 60, endMin: 17 * 60 }] },
+        lunchGap,
+      ),
+    ).not.toBe('usual-hours')
+    expect(
+      overrideKind(
+        {
+          date: '2026-12-24',
+          ranges: [
+            { startMin: 9 * 60, endMin: 12 * 60 },
+            { startMin: 13 * 60, endMin: 18 * 60 },
+          ],
+        },
+        lunchGap,
+      ),
+    ).toBe('usual-hours')
+  })
+})
