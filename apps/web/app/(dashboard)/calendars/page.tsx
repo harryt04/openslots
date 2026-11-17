@@ -1,3 +1,4 @@
+import { calendarNotice } from '@/lib/calendar-links/notices'
 import { requireBusiness } from '@/lib/businesses/current'
 import { listLinks, ownedAccounts } from '@/lib/calendar-links/repository'
 import { CalendarSettings } from './settings'
@@ -15,7 +16,7 @@ export default async function Calendars({
   return (
     <CalendarSettings
       now={now}
-      notice={notice?.slice(0, 200)}
+      notice={calendarNotice(notice)}
       timezone={business.timezone}
       links={links.map((l) => ({
         accountId: l.accountId,

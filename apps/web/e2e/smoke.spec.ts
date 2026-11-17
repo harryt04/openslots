@@ -33,6 +33,9 @@ test('status badges never rely on color alone', async ({ page }) => {
 
 test('focus is shown with a 2px ring', async ({ page }) => {
   await page.goto('/dev/tokens')
+  await expect(
+    page.getByRole('heading', { name: 'Look and color' }),
+  ).toBeVisible()
   await page.keyboard.press('Tab')
   const outline = await page.evaluate(() => {
     const style = getComputedStyle(document.activeElement!)

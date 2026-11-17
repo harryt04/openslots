@@ -121,14 +121,9 @@ export function CalendarSettings({
                 <div>
                   <h2 className="font-semibold">{l.email}</h2>
                   <p className="text-sm text-muted-foreground">
-                    Checked{' '}
-                    {Math.max(
-                      0,
-                      Math.floor(
-                        (now - new Date(l.lastCheckedAt).getTime()) / 60000,
-                      ),
-                    )}{' '}
-                    minutes ago
+                    {now - new Date(l.lastCheckedAt).getTime() < 60000
+                      ? 'Checked just now'
+                      : `Checked ${Math.floor((now - new Date(l.lastCheckedAt).getTime()) / 60000)} minutes ago`}
                   </p>
                 </div>
               </div>

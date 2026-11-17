@@ -24,7 +24,7 @@ export async function createSalon(
   await page.getByRole('button', { name: 'Create business' }).click()
   await expect(page).toHaveURL(/\/availability$/)
 
-  await page.goto('/calendars')
+  await page.getByRole('link', { name: /^Calendars/ }).click()
   // Connecting is a server action whose body names the account.
   const linking = page.waitForRequest(
     (r) =>
@@ -44,7 +44,8 @@ export async function createSalon(
   const accountEmail = shown.includes('@') ? shown : ''
 
   for (const service of options.services) {
-    await page.goto('/services/new')
+    await page.getByRole('link', { name: /^Services(?: \d+)?$/ }).click()
+    await page.getByRole('link', { name: 'New service', exact: true }).click()
     await page.getByLabel('Name', { exact: true }).fill(service.name)
     if (service.minutes) {
       await page

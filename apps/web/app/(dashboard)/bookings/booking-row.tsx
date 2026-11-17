@@ -2,7 +2,7 @@
 import '@openslots/react/styles.css'
 import { useState, useTransition } from 'react'
 import { SlotPicker } from '@openslots/react'
-import { TriangleAlert } from 'lucide-react'
+import { Copy, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -237,6 +237,7 @@ export function CopyBookingLink({ slug }: { slug: string }) {
         setCopied(true)
       }}
     >
+      <Copy aria-hidden="true" />
       {copied ? 'Copied booking link' : 'Copy booking link'}
     </Button>
   )

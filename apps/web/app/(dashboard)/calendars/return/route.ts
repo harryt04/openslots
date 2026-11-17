@@ -1,3 +1,4 @@
+import { calendarNoticeCode } from '@/lib/calendar-links/notices'
 import { z } from 'zod'
 import { requireBusiness } from '@/lib/businesses/current'
 import { finishReturn } from '@/lib/calendar-links/returns'
@@ -12,6 +13,7 @@ export async function GET(request: Request) {
     ? await finishReturn(business, session.user.id, nonce.data)
     : undefined
   const destination = new URL('/calendars', request.url)
-  if (result) destination.searchParams.set('notice', result.message)
+  const code = result && calendarNoticeCode(result.message)
+  if (code) destination.searchParams.set('notice', code)
   return Response.redirect(destination)
 }

@@ -6,6 +6,9 @@ const baseURL = `http://localhost:${port}`
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
+  // next dev and Chromium compete for CPU during route compilation. Keep
+  // concurrency bounded on shared development hosts and CI runners.
+  workers: 2,
   // The app under test is `next dev`, which compiles each route the first
   // time it is opened. With several workers that can take longer than
   // Playwright's default 5 seconds, so allow for it once, here.

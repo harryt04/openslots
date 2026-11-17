@@ -92,7 +92,20 @@ function undefinedVars(css: string): string[] {
   const root = postcss.parse(css)
   const defined = new Set<string>()
   root.walkDecls((decl) => {
-    if (decl.prop.startsWith('--')) defined.add(decl.prop)
+    // A sibling or unrelated descendant cannot provide a public/package
+    // token. Tailwind --tw-* internals are composed by multiple utilities
+    // on the same element; this static check does not model class sets.
+    const parent = decl.parent
+    if (
+      decl.prop.startsWith('--') &&
+      parent?.type === 'rule' &&
+      (decl.prop.startsWith('--tw-') ||
+        (parent as Rule).selectors.some(
+          (selector) => selector.trim() === '.openslots',
+        ))
+    ) {
+      defined.add(decl.prop)
+    }
   })
   const problems = new Set<string>()
   root.walkDecls((decl) => {
@@ -113,6 +126,11 @@ describe('dist/styles.css', () => {
 
   it('uses only custom properties it defines or gives a fallback (T-6)', () => {
     expect(undefinedVars(css)).toEqual([])
+    expect(
+      undefinedVars(
+        '.openslots .unrelated{--a:1}.openslots button{color:var(--a)}',
+      ),
+    ).toEqual(['--a (in color)'])
     // The checker notices the mistake it guards against.
     expect(
       undefinedVars(

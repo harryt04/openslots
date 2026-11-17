@@ -1211,6 +1211,12 @@ for (const seed of [17, 903, 4421])
             await sweep()
           } finally {
             failure.mockRestore()
+            await db
+              .collection('calendar_links')
+              .updateMany(
+                { businessId: business._id, status: 'needs_reconnect' },
+                { $set: { status: 'ok' }, $unset: { needsReconnectSince: '' } },
+              )
           }
         } else if (operation === 12) {
           await db
@@ -1456,12 +1462,14 @@ it('fifty failed tenants do not starve later cleanup', async () => {
       syncAt: new Date(0),
     })),
   )
-  await db
-    .collection('bookings')
-    .updateOne(
-      { _id: original!._id },
-      { $set: { status: 'cancelled', cleanup: true } },
-    )
+  // Insert the healthy tenant last, so natural collection order cannot
+  // accidentally make an unfiltered sweep appear fair.
+  await db.collection('bookings').deleteOne({ _id: original!._id })
+  await db.collection('bookings').insertOne({
+    ...original!,
+    status: 'cancelled',
+    cleanup: true,
+  })
   await sweep()
   await sweep()
   expect(
@@ -2063,4 +2071,75 @@ it('keeps the cap lock and event of a booking whose confirm reply was lost and w
     await db.collection('slot_locks').countDocuments({ opId: booking.opId }),
   ).toBe(12)
   expect(Object.keys(activeEvents())).toHaveLength(1)
+})
+
+it('does not recreate a missing event after the confirmed revision was cancelled', async () => {
+  const created = await (await call('bookings', input())).json()
+  const db = await client.getDb()
+  const id = new ObjectId(created.id)
+  await db
+    .collection('bookings')
+    .updateOne({ _id: id }, { $set: { eventSync: true } })
+  const { FakeCalendarProvider } = await import('../calendar/fake')
+  const { CalendarError } = await import('../calendar/types')
+  const create = vi.spyOn(FakeCalendarProvider.prototype, 'createEvent')
+  const update = vi
+    .spyOn(FakeCalendarProvider.prototype, 'updateEvent')
+    .mockImplementationOnce(async () => {
+      await db
+        .collection('bookings')
+        .updateOne(
+          { _id: id },
+          { $set: { status: 'cancelled', cleanup: true }, $inc: { rev: 1 } },
+        )
+      throw new CalendarError(404)
+    })
+  try {
+    await (await import('../bookings/service')).reconcile(id)
+    expect(update).toHaveBeenCalledOnce()
+    expect(create).not.toHaveBeenCalled()
+    expect(
+      (await db.collection('bookings').findOne({ _id: id }))!.cleanup,
+    ).toBe(true)
+  } finally {
+    create.mockRestore()
+    update.mockRestore()
+  }
+})
+
+it('reconcile supplies its bounded deadline to delete, patch, recreation and restore', async () => {
+  const created = await (await call('bookings', input())).json()
+  const db = await client.getDb()
+  const id = new ObjectId(created.id)
+  const { FakeCalendarProvider } = await import('../calendar/fake')
+  const { CalendarError } = await import('../calendar/types')
+  const update = vi
+    .spyOn(FakeCalendarProvider.prototype, 'updateEvent')
+    .mockRejectedValueOnce(new CalendarError(404))
+  const create = vi.spyOn(FakeCalendarProvider.prototype, 'createEvent')
+  const remove = vi.spyOn(FakeCalendarProvider.prototype, 'deleteEvent')
+  const before = Date.now()
+  try {
+    await db
+      .collection('bookings')
+      .updateOne({ _id: id }, { $set: { eventSync: true } })
+    await (await import('../bookings/service')).reconcile(id)
+    expect(update).toHaveBeenCalledTimes(2)
+    expect(create).toHaveBeenCalledOnce()
+    await call('cancel', {}, created.manageUrl.split('/').pop())
+    expect(remove).toHaveBeenCalledOnce()
+    for (const deadline of [
+      update.mock.calls[0]![3],
+      update.mock.calls[1]![3],
+      create.mock.calls[0]![2],
+      remove.mock.calls[0]![2],
+    ]) {
+      expect(deadline).toBeGreaterThanOrEqual(before + 150000)
+      expect(deadline).toBeLessThanOrEqual(Date.now() + 150000)
+    }
+  } finally {
+    update.mockRestore()
+    create.mockRestore()
+    remove.mockRestore()
+  }
 })
