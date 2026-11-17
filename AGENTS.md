@@ -61,6 +61,8 @@ Run one package with `pnpm --filter @openslots/core test` (or `@openslots/react`
 - **Workspace packages export TypeScript source** to the app (`exports` in their `package.json`); `publishConfig` points npm at `dist`. The app does not need the packages built first.
 - **The shadcn CLI may write a wrong `cn` import** (`from "cn"`) into new components in this workspace. Correct it to `@/lib/utils`; that is the one hand-edit allowed in `components/ui`.
 - **Public customer pages are `app/(public)/b` and `app/(public)/m`.** They have no sidebar, no PostHog (only the `(dashboard)` layout mounts it) and a CSP without analytics hosts. They look businesses up with `lib/public-pages/lookup.ts`, then call `/api/v1` from the browser through `@openslots/react`; never add booking logic or availability to them. The Playwright helper `e2e/support/salon.ts` sets an owner up through the real admin screens.
+- **Import zod as a namespace in `packages/`** (`import * as z from 'zod'`). `import { z }` drags every zod locale into an embedder's bundle.
+- **The Docker image is verified in CI**, not locally: the `Docker image` job builds it, starts it with `docker compose`, and smoke-tests it.
 - **For browser checks use `agent-browser`** with a session named for your worktree, against `pnpm run dev:fake`.
 
 ## Fake calendar contract

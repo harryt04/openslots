@@ -3,7 +3,7 @@
  * validates with these and `@openslots/react` parses responses with them, so
  * they are the contract between the two.
  */
-import { z } from 'zod'
+import * as z from 'zod'
 
 import {
   bookingStatusSchema,

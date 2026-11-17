@@ -1,6 +1,6 @@
 {
   "name": "@openslots/core",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "OpenSlots slot engine, schemas and shared types. No I/O.",
   "license": "MIT",
   "repository": {
@@ -47,5 +47,18 @@
   "dependencies": {
     "@date-fns/tz": "^1.5.0",
     "zod": "^4.6.7"
+  },
+  "homepage": "https://github.com/harryt04/openslots#readme",
+  "bugs": {
+    "url": "https://github.com/harryt04/openslots/issues"
+  },
+  "keywords": [
+    "booking",
+    "appointments",
+    "scheduling",
+    "slots"
+  ],
+  "engines": {
+    "node": ">=20"
   }
 }
