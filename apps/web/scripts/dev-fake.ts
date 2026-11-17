@@ -79,6 +79,10 @@ async function main() {
     `[dev:fake] app at ${origin}, test sign-in at ${origin}/dev/sign-in`,
   )
 
+  // Each fake run starts with a fresh database and compilation graph. Reusing
+  // Turbopack's persisted dev tasks across repeated runs produced a stale-task
+  // panic; keep production build artifacts intact for prod-smoke.
+  rmSync('.next/dev', { recursive: true, force: true })
   mkdirSync('.next', { recursive: true })
   const serverLog = createWriteStream('.next/dev-fake-server.log', {
     flags: 'w',
