@@ -1,3 +1,4 @@
+import { beginReturn } from '@/lib/calendar-links/returns'
 import { z } from 'zod'
 import { ObjectId } from 'mongodb'
 import { requireBusiness } from '@/lib/businesses/current'
@@ -6,11 +7,13 @@ import { getDb } from '@/lib/mongo-client'
 import { isFakeGoogle } from '@/lib/env'
 import { seedFakeCalendar } from '@/lib/calendar/fake'
 export async function POST(request: Request) {
-  const { session } = await requireBusiness()
+  const { session, business } = await requireBusiness()
   const data = z
     .object({ accountId: z.string().optional() })
     .parse(await request.json())
-  if (!isFakeGoogle()) return Response.json({ fake: false })
+  const nonce = await beginReturn(business, session.user.id, data.accountId)
+  const callbackURL = `/calendars/return?nonce=${nonce}`
+  if (!isFakeGoogle()) return Response.json({ fake: false, callbackURL })
   let id = data.accountId
   if (id && !(await ownedAccounts(session.user.id)).some((a) => a.id === id))
     return new Response(null, { status: 403 })
@@ -34,5 +37,5 @@ export async function POST(request: Request) {
       { id: 'holidays', summary: 'Holidays', accessRole: 'reader' },
     ],
   })
-  return Response.json({ fake: true })
+  return Response.json({ fake: true, callbackURL })
 }

@@ -25,7 +25,7 @@ export async function mutateCalendar(input: z.input<typeof schema>) {
         session.user.email,
       )
       revalidatePath('/', 'layout')
-      return result.ok ? 'Saved' : result.message
+      return result.message
     }
     if (data.operation === 'block')
       await setBlocking(
@@ -39,8 +39,10 @@ export async function mutateCalendar(input: z.input<typeof schema>) {
     if (data.operation === 'unlink')
       await unlinkAccount(business, data.accountId)
     revalidatePath('/', 'layout')
-    return 'Saved'
+    return data.operation === 'unlink'
+      ? 'Account unlinked. Booking calendar moved to another writable account if available; otherwise no booking calendar remains.'
+      : 'Saved'
   } catch {
-    return 'Could not save. Choose a connected writable booking calendar before unlinking, or retry.'
+    return `Could not ${data.operation} calendar. Check the account and retry.`
   }
 }

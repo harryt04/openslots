@@ -16,7 +16,11 @@ afterAll(async () => {
   await mongo?.stop()
   vi.unstubAllGlobals()
 })
-async function signInWithGoogle(email: string, verified: boolean) {
+async function signInWithGoogle(
+  email: string,
+  verified: boolean,
+  sessionCookie?: string,
+) {
   // Use the installed provider's exchange and userinfo entry points, preserving
   // the real handler, OAuth state, database hooks and callback error handling.
   const context = await auth.$context
@@ -32,18 +36,23 @@ async function signInWithGoogle(email: string, verified: boolean) {
   })
   try {
     const start = await auth.handler(
-      new Request('http://localhost:3000/api/auth/sign-in/social', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          origin: 'http://localhost:3000',
+      new Request(
+        'http://localhost:3000/api/auth/' +
+          (sessionCookie ? 'link-social' : 'sign-in/social'),
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(sessionCookie ? { cookie: sessionCookie } : {}),
+            origin: 'http://localhost:3000',
+          },
+          body: JSON.stringify({
+            provider: 'google',
+            callbackURL: '/',
+            errorCallbackURL: '/login',
+          }),
         },
-        body: JSON.stringify({
-          provider: 'google',
-          callbackURL: '/',
-          errorCallbackURL: '/login',
-        }),
-      }),
+      ),
     )
     const { url } = await start.json()
     const state = new URL(url).searchParams.get('state')!
@@ -55,7 +64,11 @@ async function signInWithGoogle(email: string, verified: boolean) {
       new Request(
         'http://localhost:3000/api/auth/callback/google?code=mock&state=' +
           encodeURIComponent(state),
-        { headers: { cookie } },
+        {
+          headers: {
+            cookie: [cookie, sessionCookie].filter(Boolean).join('; '),
+          },
+        },
       ),
     )
   } finally {
@@ -113,4 +126,20 @@ it('refuses an existing user who was removed from the allowlist, with no new ses
   } finally {
     process.env.OPENSLOTS_ALLOWED_EMAILS = 'allowed@example.test'
   }
+})
+
+it('refuses a second Google identity outside the allowlist on linkSocial callback', async () => {
+  const signedIn = await signInWithGoogle('allowed@example.test', true)
+  const cookie = signedIn.headers
+    .getSetCookie()
+    .map((v) => v.split(';')[0])
+    .join('; ')
+  const before = await rowCounts()
+  const result = await signInWithGoogle(
+    'second-refused@example.test',
+    true,
+    cookie,
+  )
+  expect(result.headers.get('location')).toContain('error=EMAIL_NOT_ALLOWED')
+  expect(await rowCounts()).toEqual(before)
 })

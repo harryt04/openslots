@@ -19,6 +19,7 @@ export type Link = {
     writable: boolean
   }[]
   status: 'ok' | 'needs_reconnect'
+  needsReconnectSince?: Date
   lastCheckedAt: Date
   createdAt: Date
   updatedAt: Date
@@ -44,8 +45,22 @@ export async function ownedAccounts(userId: string) {
   return accounts.map((a) => ({
     id: String(a._id),
     userId,
-    email: String(a.email ?? ''),
+    email: String(a.email ?? storedGoogleEmail(a.idToken) ?? ''),
   }))
+}
+// Better Auth stores the Google id token returned by its validated OAuth exchange.
+// Read identity metadata only; never serialize the token to a client.
+function storedGoogleEmail(token: unknown): string | undefined {
+  if (typeof token !== 'string') return
+  try {
+    const payload = JSON.parse(
+      Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'),
+    )
+    if (typeof payload.email === 'string' && payload.email_verified === true)
+      return payload.email
+  } catch {
+    /* Older accounts without an id token use their calendar name. */
+  }
 }
 export async function markNeedsReconnect(
   businessId: ObjectId,
@@ -55,8 +70,20 @@ export async function markNeedsReconnect(
   await (
     await links()
   ).updateOne(
+    { businessId, accountId, status: { $ne: 'needs_reconnect' } },
+    {
+      $set: {
+        status: 'needs_reconnect',
+        needsReconnectSince: now,
+        updatedAt: now,
+      },
+    },
+  )
+  await (
+    await links()
+  ).updateOne(
     { businessId, accountId },
-    { $set: { status: 'needs_reconnect', lastCheckedAt: now, updatedAt: now } },
+    { $set: { lastCheckedAt: now, updatedAt: now } },
   )
 }
 export async function refreshLink(
@@ -87,23 +114,23 @@ export async function refreshLink(
     const first =
       choices.find((c) => c.calendarId === primary?.id && c.writable) ??
       choices.find((c) => c.writable)
-    if (!previous && !first)
-      throw new Error(
-        'No writable calendar. Share a writable calendar and retry.',
-      )
+
     const now = new Date()
     await col.updateOne(
       { businessId: business._id, accountId },
       {
         $set: {
-          email:
-            account.email ||
-            (primary?.id.includes('@') ? primary.id : fallbackEmail),
-          calendars: choices,
+          email: account.email || primary?.summary || 'Google account',
+          calendars: [...choices].sort(
+            (a, b) =>
+              Number(b.calendarId === first?.calendarId) -
+              Number(a.calendarId === first?.calendarId),
+          ),
           status: 'ok',
           lastCheckedAt: now,
           updatedAt: now,
         },
+        $unset: { needsReconnectSince: '' },
         $setOnInsert: { businessId: business._id, accountId, createdAt: now },
       },
       { upsert: true },
@@ -122,7 +149,15 @@ export async function refreshLink(
           },
         },
       )
-    return { ok: true } as const
+    const moved = await repairBookingCalendar(business)
+    return {
+      ok: true,
+      message: !first
+        ? 'No writable calendar. Share a writable calendar, then Refresh.'
+        : moved
+          ? 'Booking calendar moved to an available writable calendar.'
+          : 'Saved',
+    } as const
   } catch (error) {
     if (error instanceof CalendarAuthError) {
       if (!previous) {
@@ -133,7 +168,8 @@ export async function refreshLink(
             $setOnInsert: {
               businessId: business._id,
               accountId,
-              email: account.email || fallbackEmail,
+              email: account.email || 'Google account',
+              needsReconnectSince: now,
               calendars: [],
               status: 'needs_reconnect',
               lastCheckedAt: now,
@@ -181,8 +217,18 @@ export async function chooseBookingCalendar(
   })
   if (!link)
     throw new Error('Choose a writable calendar on a connected account.')
-  await (await getDb()).collection<BusinessDoc>('businesses').updateOne(
-    { _id: business._id, ownerUserId: business.ownerUserId },
+  const businesses = (await getDb()).collection<BusinessDoc>('businesses')
+  const current = await businesses.findOne({
+    _id: business._id,
+    ownerUserId: business.ownerUserId,
+  })
+  if (!current) throw Error('Business no longer available.')
+  const result = await businesses.updateOne(
+    {
+      _id: business._id,
+      ownerUserId: business.ownerUserId,
+      bookingCalendar: current.bookingCalendar ?? { $exists: false },
+    },
     {
       $set: {
         bookingCalendar: { accountId, calendarId },
@@ -190,20 +236,66 @@ export async function chooseBookingCalendar(
       },
     },
   )
+  await repairBookingCalendar(business)
+  if (!result.matchedCount)
+    throw Error('Calendar choice changed in another tab. Retry.')
 }
 export async function unlinkAccount(business: BusinessDoc, accountId: string) {
-  // Refuse deletion of the destination, including when a stale form is submitted.
-  const current = await (
-    await getDb()
-  )
-    .collection<BusinessDoc>('businesses')
-    .findOne({ _id: business._id, ownerUserId: business.ownerUserId })
-  if (current?.bookingCalendar?.accountId === accountId)
-    throw new Error(
-      'Choose a booking calendar on another account before unlinking.',
-    )
   await (await links()).deleteOne({ businessId: business._id, accountId })
+  await repairBookingCalendar(business)
 }
+
+// Compare-and-set prevents repair from overwriting a newer selection. Both
+// choose and unlink re-check after their write; availability still fails closed.
+export async function repairBookingCalendar(business: BusinessDoc) {
+  const col = (await getDb()).collection<BusinessDoc>('businesses')
+  const current = await col.findOne({
+    _id: business._id,
+    ownerUserId: business.ownerUserId,
+  })
+  if (!current) return false
+  const all = await listLinks(business._id)
+  const old = current.bookingCalendar
+  if (
+    old &&
+    all.some(
+      (l) =>
+        l.accountId === old.accountId &&
+        l.status === 'ok' &&
+        l.calendars.some((c) => c.calendarId === old.calendarId && c.writable),
+    )
+  )
+    return false
+  const candidates = [...all].sort(
+    (a, b) =>
+      Number(b.accountId === old?.accountId) -
+      Number(a.accountId === old?.accountId),
+  )
+  const link = candidates.find(
+    (l) => l.status === 'ok' && l.calendars.some((c) => c.writable),
+  )
+  const calendar = link?.calendars.find((c) => c.writable)
+  await col.updateOne(
+    {
+      _id: business._id,
+      ownerUserId: business.ownerUserId,
+      bookingCalendar: old ?? { $exists: false },
+    },
+    link && calendar
+      ? {
+          $set: {
+            bookingCalendar: {
+              accountId: link.accountId,
+              calendarId: calendar.calendarId,
+            },
+            updatedAt: new Date(),
+          },
+        }
+      : { $unset: { bookingCalendar: '' }, $set: { updatedAt: new Date() } },
+  )
+  return Boolean(old)
+}
+
 export async function calendarAvailability(business: BusinessDoc) {
   const unavailable = { ok: false, reason: 'calendar_unavailable' } as const
   const all = await listLinks(business._id)

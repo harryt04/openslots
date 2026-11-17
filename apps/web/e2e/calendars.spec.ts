@@ -30,6 +30,10 @@ test('calendar linking, choices, auth failure and reconnect', async ({
   await page.getByRole('button', { name: 'Create business' }).click()
   await page.goto('/calendars')
   await capture('empty')
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'No booking calendar' }),
+  ).toContainText('No booking calendar')
+  await capture('no-booking-calendar')
   await page.getByRole('button', { name: /Connect signed-in/ }).click()
   await expect(page.getByText('New bookings go here')).toBeVisible()
   await page.getByRole('switch').first().focus()
@@ -76,10 +80,22 @@ test('calendar linking, choices, auth failure and reconnect', async ({
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.goto('/')
   await expect(
-    page.getByText('Calendar connection needs reconnecting.', { exact: false }),
+    page.getByText('Calendar connection needs attention.', { exact: false }),
   ).toBeVisible()
   await capture('banner')
   await page.goto('/calendars')
   await page.getByRole('button', { name: 'Reconnect', exact: true }).click()
   await expect(page.getByText('Connected', { exact: true })).toHaveCount(2)
+  page.on('dialog', (dialog) => dialog.accept())
+  await page.getByRole('button', { name: 'Unlink', exact: true }).last().click()
+  await expect(
+    page.getByRole('button', { name: /Connect second-/ }),
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Unlink', exact: true }).click()
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'No booking calendar' }),
+  ).toContainText('No booking calendar')
+  await expect(
+    page.getByRole('button', { name: /Connect signed-in/ }),
+  ).toBeVisible()
 })
