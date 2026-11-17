@@ -1,9 +1,14 @@
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { build } from 'esbuild'
+import { resolve } from 'node:path'
 async function main() {
   const bundle = await build({
     entryPoints: ['e2e/embed/main.tsx'],
+    // Resolve types through the workspace; execute the built consumer asset.
+    alias: {
+      '@openslots/react': resolve('../../packages/react/dist/index.js'),
+    },
     bundle: true,
     write: false,
     format: 'esm',
