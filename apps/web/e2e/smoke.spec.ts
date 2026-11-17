@@ -31,7 +31,7 @@ test('status badges never rely on color alone', async ({ page }) => {
   }
 })
 
-test('focus is shown with a 2px ring', async ({ page }) => {
+test('focus is shown immediately with a 2px ring', async ({ page }) => {
   await page.goto('/dev/tokens')
   await expect(
     page.getByRole('heading', { name: 'Look and color' }),
@@ -42,6 +42,16 @@ test('focus is shown with a 2px ring', async ({ page }) => {
     return `${style.outlineWidth} ${style.outlineStyle}`
   })
   expect(outline).toBe('2px solid')
+  // Read in the same task as focus, before an outline-width transition can
+  // finish and conceal a 3px -> 2px interpolation from transition-all.
+  const immediate = await page.evaluate(() => {
+    const button = document.activeElement as HTMLElement
+    button.blur()
+    void getComputedStyle(button).outlineWidth
+    button.focus()
+    return getComputedStyle(button).outlineWidth
+  })
+  expect(immediate).toBe('2px')
 })
 
 test('sign-in, onboarding, creating and switching businesses', async ({

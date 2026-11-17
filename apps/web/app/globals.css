@@ -167,6 +167,11 @@
 :focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
+  /* shadcn's transition-all otherwise interpolates outline-width from the
+   * unfocused CSS `medium` (3px) to 2px. Keyboard focus must be visible at
+   * its specified width immediately, including the first animation frame. */
+  transition-property:
+    color, background-color, border-color, opacity, box-shadow, transform;
   --tw-ring-shadow: 0 0 #0000;
 }
 

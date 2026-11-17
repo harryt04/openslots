@@ -126,3 +126,9 @@ A subsequent eight-worker Playwright run was stopped after unrelated admin actio
 Final full local CI passed (248 web tests, core tests, React 19/18 suites, production build); the added reconciliation tests passed and the earlier drain failure did not recur. Expanded Playwright suite passed 32/32 in 2.3 minutes with two workers. Final repeated-run evidence is recorded in the PR.
 
 Additional ignored artifacts: `S2-{empty,list,mobile,details,reschedule,cancel}-{light,dark}.png`, copied from the existing Bookings test captures. They do not use the exact specification fixture and are not a visual sign-off. Discarded exploratory theme captures are not evidence; the retained S1 light screenshot was inspected after recapture.
+
+## Reproduced focus defect
+
+The second repeated two-worker run failed Developers' Rotate key focus assertion: expected `2px`, received `3px` (31 other tests passed). The shared shadcn button uses `transition-all`; changing from unfocused `outline-style: none` / `medium` width to the global focused `2px solid` rule animates outline width from 3px. The global focus rule now excludes outline width from its transition properties. This fixes the immediate visible state, rather than waiting out the transition in the test. The token-sheet test additionally reads the computed width in the same JavaScript task as refocusing. Final repetition results belong in the PR.
+
+Built production client search: only `BETTER_AUTH_SECRET`'s name appeared (Better Auth's generic environment getter); the CI build-secret literal and searched Mongo/Google-secret/allowlist names did not appear. No conclusion about all possible secrets is implied.
