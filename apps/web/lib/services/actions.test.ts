@@ -4,9 +4,15 @@ import { afterAll, beforeAll, expect, test, vi } from 'vitest'
 
 vi.mock('server-only', () => ({}))
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
-const tenant = vi.hoisted(() => ({ business: {} as { _id: ObjectId } }))
+const tenant = vi.hoisted(() => ({
+  business: {} as { _id: ObjectId },
+  signedIn: true,
+}))
 vi.mock('../businesses/current', () => ({
-  requireBusiness: async () => tenant,
+  requireBusiness: async () => {
+    if (!tenant.signedIn) throw Error('Sign in required')
+    return tenant
+  },
 }))
 let mongo: MongoMemoryServer
 let client: typeof import('../mongo-client')
@@ -61,4 +67,44 @@ test('create and update refuse a real schedule belonging to another business', a
   expect(
     await db.collection('services').findOne({ _id: service!._id }),
   ).toMatchObject({ name: 'Trim', scheduleId: own })
+})
+
+test('active and delete actions refuse foreign and malformed service ids without writes', async () => {
+  const db = await client.getDb()
+  const foreign = {
+    _id: new ObjectId(),
+    businessId: new ObjectId(),
+    name: 'Private service',
+    active: true,
+  }
+  await db.collection('services').insertOne(foreign)
+  const { setServiceActiveAction, deleteServiceAction } =
+    await import('../../app/actions/services')
+  for (const id of [String(foreign._id), 'malformed', null, {}]) {
+    expect(await setServiceActiveAction(id, false)).toEqual({
+      ok: false,
+      message: 'Service not found.',
+    })
+    expect(await deleteServiceAction(id)).toEqual({
+      ok: false,
+      message: 'Service not found.',
+    })
+    expect(
+      await db.collection('services').findOne({ _id: foreign._id }),
+    ).toEqual(foreign)
+  }
+  tenant.signedIn = false
+  try {
+    await expect(
+      setServiceActiveAction(String(foreign._id), false),
+    ).rejects.toThrow('Sign in required')
+    await expect(deleteServiceAction(String(foreign._id))).rejects.toThrow(
+      'Sign in required',
+    )
+    expect(
+      await db.collection('services').findOne({ _id: foreign._id }),
+    ).toEqual(foreign)
+  } finally {
+    tenant.signedIn = true
+  }
 })

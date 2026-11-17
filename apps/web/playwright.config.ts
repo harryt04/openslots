@@ -5,6 +5,7 @@ const baseURL = `http://localhost:${port}`
 
 export default defineConfig({
   testDir: './e2e',
+  globalTeardown: './e2e/support/log-audit.ts',
   fullyParallel: true,
   // next dev and Chromium compete for CPU during route compilation. Keep
   // concurrency bounded on shared development hosts and CI runners.
@@ -24,11 +25,19 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   // The app under test always runs in fake mode: in-memory MongoDB, fake
   // calendar provider, test sign-in. No Google account is ever involved.
-  webServer: {
-    command: 'pnpm run dev:fake',
-    env: { PORT: port },
-    url: `${baseURL}/login`,
-    reuseExistingServer: !process.env.CI,
-    timeout: 180_000,
-  },
+  webServer: [
+    {
+      command: 'pnpm run dev:fake',
+      env: { PORT: port },
+      url: `${baseURL}/login`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 180_000,
+    },
+    {
+      command:
+        'pnpm --filter @openslots/react build && pnpm exec tsx e2e/embed/server.ts',
+      url: `http://localhost:${process.env.E2E_EMBED_PORT ?? 3253}`,
+      reuseExistingServer: false,
+    },
+  ],
 })

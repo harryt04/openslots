@@ -88,6 +88,10 @@ export const auth = betterAuth({
               userId: session.userId,
               providerId: 'google',
               accountId: session.userId,
+              // Deliberately recognizable fake credentials let browser/log
+              // tests detect accidental OAuth payload exposure.
+              accessToken: 'fake-access-token-e2e-only',
+              refreshToken: 'fake-refresh-token-e2e-only',
             })
           }
         },

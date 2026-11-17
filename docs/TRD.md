@@ -277,7 +277,7 @@ Rate limiting checks and increments the IP bucket first and stops immediately wh
 
 Customer fields follow the service: when `askPhone` is true the phone is required, and when it is false a phone is not accepted (it is stripped); notes are always optional, and stripped when `askNotes` is false. `customerFieldsSchema` stays permissive (phone and notes optional); both the booking form and `POST /bookings` validate the customer with `customerFieldsFor({ askPhone, askNotes })` from `@openslots/core`, which applies these rules, so the two cannot disagree.
 
-Protection: zod validation and length limits on every field; rate limits per key and IP (suggested: 60 slot reads and 10 booking attempts per minute), stored in MongoDB with a TTL index so it works on one or many instances; a hidden honeypot field in the form; no customer data is ever returned by list endpoints.
+Protection: public POST bodies are limited to 16 KiB while reading the stream (including unknown fields and cancel bodies), returning `400 invalid_request` before booking lookup or writes when exceeded; zod validation and length limits on every field; rate limits per key and IP (suggested: 60 slot reads and 10 booking attempts per minute), stored in MongoDB with a TTL index so it works on one or many instances; a hidden honeypot field in the form; no customer data is ever returned by list endpoints.
 
 Admin actions (S2 to S7) use Next.js server actions or route handlers behind the session, and every query is filtered by a business the session's user owns. A test must prove one user cannot read or change another user's business.
 

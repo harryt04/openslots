@@ -1111,9 +1111,12 @@ for (const seed of [17, 903, 4421])
     const db = await client.getDb()
     const secondService = new ObjectId()
     const source = await db.collection('services').findOne({ _id: service })
-    await db
-      .collection('services')
-      .insertOne({ ...source, _id: secondService, slug: 'second' })
+    await db.collection('services').insertOne({
+      ...source,
+      _id: secondService,
+      slug: 'second',
+      windowDays: 365,
+    })
     await db.collection('services').updateMany({}, { $set: { maxPerDay: 2 } })
     const tokens: string[] = []
     const { FakeCalendarProvider } = await import('../calendar/fake')
@@ -1145,11 +1148,20 @@ for (const seed of [17, 903, 4421])
           }
         } else if (operation === 8) {
           const gate = pauseCalendar('create')
-          const pending = call('bookings', input(time))
+          // A distinct future day on the unchanged-cap service guarantees this
+          // paused create reaches Google rather than losing admission first.
+          const freeTime = new Date(
+            +start + (step + 3) * 86400000,
+          ).toISOString()
+          const pending = call('bookings', {
+            ...input(freeTime),
+            serviceId: String(secondService),
+          })
           const reached = await Promise.race([
             gate.ready.then(() => true),
             pending.then(() => false),
           ])
+          expect(reached).toBe(true)
           if (reached) {
             await db
               .collection('bookings')
@@ -1165,19 +1177,50 @@ for (const seed of [17, 903, 4421])
           if (response.status === 201)
             tokens.push((await response.json()).manageUrl.split('/').pop())
         } else if (operation === 9 && token) {
+          const { tokenHash } = await import('./security')
+          const existing = await db.collection('bookings').findOne({
+            status: 'confirmed',
+            eventSync: { $ne: true },
+            pendingOp: { $exists: false },
+            manageTokenHash: { $in: tokens.map(tokenHash) },
+          })
+          if (!existing) continue
+          const activeToken = tokens.find(
+            (value) => tokenHash(value) === existing.manageTokenHash,
+          )!
+          const query = new URLSearchParams({
+            service: String(existing.serviceId),
+            from: start.toISOString().slice(0, 10),
+            to: new Date(+start + 27 * 86400000).toISOString().slice(0, 10),
+            tz: 'UTC',
+          })
+          const slots = await handle(
+            new Request(`http://localhost:3201/api/v1/slots?${query}`, {
+              headers: { 'X-OpenSlots-Key': business.publishableKey },
+            }),
+            'slots',
+          )
+          const choices = Object.values(
+            (await slots.json()).days ?? {},
+          ).flat() as string[]
+          const freeTime = choices.find(
+            (value) => Math.abs(+new Date(value) - +existing.start) >= 3600000,
+          )
+          if (!freeTime) continue
           const gate = pauseCalendar('update')
-          const moving = call('reschedule', { start: time }, token)
+          const moving = call('reschedule', { start: freeTime }, activeToken)
           const reached = await Promise.race([
             gate.ready.then(() => true),
             moving.then(() => false),
           ])
+          expect(reached).toBe(true)
           if (reached) {
             await sweep()
             await call(
               'bookings',
               input(new Date(+start + 6 * 1800000).toISOString()),
             )
-            await call('cancel', {}, token)
+            await call('cancel', {}, activeToken)
           }
           gate.release()
           await moving
@@ -1245,8 +1288,27 @@ for (const seed of [17, 903, 4421])
           await sweep()
         } else await sweep()
         await assertInvariants()
-        // Lowering a cap can leave pre-existing usage above it; lock ownership
-        // remains checked above, and dedicated admission tests cover the bound.
+        // Only the first service's cap changes. The second must always obey
+        // its unchanged per-business-local-day cap, including paused creates.
+        const counts = await db
+          .collection('bookings')
+          .aggregate([
+            { $match: { serviceId: secondService, status: 'confirmed' } },
+            {
+              $group: {
+                _id: {
+                  $dateToString: {
+                    date: '$start',
+                    format: '%Y-%m-%d',
+                    timezone: 'UTC',
+                  },
+                },
+                count: { $sum: 1 },
+              },
+            },
+          ])
+          .toArray()
+        for (const day of counts) expect(day.count).toBeLessThanOrEqual(2)
       } catch (e) {
         throw new Error(`seed ${seed}, step ${step}`, { cause: e })
       } finally {
@@ -2142,4 +2204,234 @@ it('reconcile supplies its bounded deadline to delete, patch, recreation and res
     create.mockRestore()
     remove.mockRestore()
   }
+})
+
+it('sweep filters leased and deferred tombstones before taking its bounded batch', async () => {
+  const db = await client.getDb()
+  const future = new Date(Date.now() + 3600000)
+  const blocked = Array.from({ length: 60 }, (_, i) => ({
+    _id: new ObjectId(),
+    manageTokenHash: String(new ObjectId()),
+    businessId: new ObjectId(),
+    status: 'cancelled',
+    rev: 0,
+    purgeAfter: new Date(0),
+    ...(i % 2 ? { syncAt: future } : { syncAt: new Date(0), retryAt: future }),
+  }))
+  const eligible = {
+    _id: new ObjectId(),
+    manageTokenHash: String(new ObjectId()),
+    businessId: new ObjectId(),
+    status: 'cancelled',
+    rev: 0,
+    purgeAfter: new Date(0),
+    syncAt: new Date(0),
+    retryAt: new Date(0),
+  }
+  await db.collection('bookings').insertMany([...blocked, eligible])
+  await sweep()
+  expect(
+    await db.collection('bookings').findOne({ _id: eligible._id }),
+  ).toMatchObject({ rev: 2, retryCount: 1 })
+  for (const row of blocked)
+    expect(await db.collection('bookings').findOne({ _id: row._id })).toEqual(
+      row,
+    )
+})
+
+it('sweep takes oldest eligible tombstones first rather than insertion order', async () => {
+  const db = await client.getDb()
+  const rows = Array.from({ length: 51 }, (_, i) => ({
+    _id: new ObjectId(),
+    manageTokenHash: String(new ObjectId()),
+    businessId: new ObjectId(),
+    status: 'cancelled',
+    rev: 0,
+    purgeAfter: new Date(0),
+    syncAt: new Date(100000 - i * 1000),
+  }))
+  await db.collection('bookings').insertMany(rows)
+  await sweep()
+  expect(
+    await db.collection('bookings').findOne({ _id: rows[0]!._id }),
+  ).toMatchObject({ rev: 0 })
+  expect(
+    await db.collection('bookings').findOne({ _id: rows[50]!._id }),
+  ).toMatchObject({ rev: 2, retryCount: 1 })
+  expect(
+    await db.collection('bookings').countDocuments({ retryCount: 1 }),
+  ).toBe(50)
+})
+
+it('ended-booking lock release is written only once across both passes and repeated sweeps', async () => {
+  const response = await call('bookings', input())
+  expect(response.status).toBe(201)
+  const { id } = await response.json()
+  const db = await client.getDb()
+  await db
+    .collection('bookings')
+    .updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { end: new Date(Date.now() - 2 * 86400000) } },
+    )
+  await sweep()
+  const released = await db
+    .collection('bookings')
+    .findOne({ _id: new ObjectId(id) })
+  expect(released!.locksReleased).toBe(true)
+  expect(
+    await db
+      .collection('slot_locks')
+      .countDocuments({ bookingId: new ObjectId(id) }),
+  ).toBe(0)
+  await sweep()
+  expect(
+    await db.collection('bookings').findOne({ _id: new ObjectId(id) }),
+  ).toEqual(released)
+})
+
+it('public route security matrix preserves the error envelope and tenant boundary', async () => {
+  const db = await client.getDb()
+  const created = await call('bookings', input())
+  expect(created.status).toBe(201)
+  const booking = await created.json()
+  const token = booking.manageUrl.split('/').pop()
+  const foreign = {
+    ...business,
+    _id: new ObjectId(),
+    ownerUserId: 'other-owner',
+    name: 'Other business',
+    slug: 'other-business',
+    publishableKey: 'os_pk_' + 'z'.repeat(32),
+  }
+  await db.collection('businesses').insertOne(foreign)
+  const before = await db.collection('bookings').find().toArray()
+  const routes = [
+    'business',
+    'slots',
+    'bookings',
+    'manage',
+    'cancel',
+    'reschedule',
+  ] as const
+  for (const route of routes) {
+    for (const attack of [
+      'missing',
+      'unknown',
+      'foreign',
+      'origin',
+      'null',
+      'oversized',
+      'method',
+    ] as const) {
+      await db.collection('api_rate_limits').deleteMany({})
+      const read = ['business', 'slots', 'manage'].includes(route)
+      const headers = new Headers({
+        'X-OpenSlots-Key': business.publishableKey,
+      })
+      if (attack === 'missing') headers.delete('X-OpenSlots-Key')
+      if (attack === 'unknown')
+        headers.set('X-OpenSlots-Key', 'os_pk_' + 'q'.repeat(32))
+      if (attack === 'foreign')
+        headers.set('X-OpenSlots-Key', foreign.publishableKey)
+      if (attack === 'origin' || attack === 'null')
+        headers.set(
+          'Origin',
+          attack === 'null' ? 'null' : 'https://forbidden.example.test',
+        )
+      const query = new URLSearchParams({
+        service: String(service),
+        from: start.toISOString().slice(0, 10),
+        to: new Date(+start + 86400000).toISOString().slice(0, 10),
+        tz: 'UTC',
+      })
+      // GET has no body in this API. An oversized-body POST to a read route
+      // is rejected as a method error; writes enforce the byte limit first.
+      const method =
+        attack === 'method'
+          ? 'DELETE'
+          : attack === 'oversized'
+            ? 'POST'
+            : read
+              ? 'GET'
+              : 'POST'
+      const response = await handle(
+        new Request(`http://localhost:3201/api/v1/${route}?${query}`, {
+          method,
+          headers,
+          ...(method === 'POST'
+            ? {
+                body: JSON.stringify({
+                  ...input(),
+                  ...(attack === 'oversized'
+                    ? { padding: 'x'.repeat(16385) }
+                    : {}),
+                }),
+              }
+            : {}),
+        }),
+        route,
+        token,
+      )
+      const expected =
+        attack === 'method' || (attack === 'oversized' && read)
+          ? 405
+          : attack === 'oversized'
+            ? 400
+            : attack === 'foreign'
+              ? route === 'business'
+                ? 200
+                : 404
+              : attack === 'origin' || attack === 'null'
+                ? 403
+                : 401
+      expect(response.status, `${route}: ${attack}`).toBe(expected)
+      const body = await response.json()
+      if (expected === 200) {
+        // A valid second key legitimately reads its OWN business, never A.
+        expect(body).toMatchObject({ name: 'Other business', services: [] })
+      } else {
+        expect(body).toEqual({
+          error: {
+            code:
+              expected === 405 || expected === 400
+                ? 'invalid_request'
+                : expected === 404
+                  ? 'not_found'
+                  : expected === 403
+                    ? 'origin_not_allowed'
+                    : 'invalid_key',
+            message: expect.any(String),
+          },
+        })
+        expect(JSON.stringify(body)).not.toContain(String(service))
+        expect(JSON.stringify(body)).not.toContain(business.name)
+        expect(JSON.stringify(body)).not.toContain(booking.id)
+      }
+    }
+  }
+  expect(await db.collection('bookings').find().toArray()).toEqual(before)
+})
+
+it('public mutation routes reject oversized streams before looking up a manage token or writing', async () => {
+  const db = await client.getDb()
+  for (const route of ['bookings', 'cancel', 'reschedule'] as const) {
+    for (const token of ['x'.repeat(43), 'malformed']) {
+      const response = await handle(
+        new Request('http://localhost:3201/api/v1/' + route, {
+          method: 'POST',
+          headers: { 'X-OpenSlots-Key': business.publishableKey },
+          body: JSON.stringify({ ...input(), padding: 'x'.repeat(16385) }),
+        }),
+        route,
+        token,
+      )
+      expect(response.status).toBe(400)
+      expect(await response.json()).toEqual({
+        error: { code: 'invalid_request', message: 'invalid request' },
+      })
+    }
+  }
+  expect(await db.collection('bookings').countDocuments()).toBe(0)
+  expect(state.operations).toHaveLength(0)
 })
