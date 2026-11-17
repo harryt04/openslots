@@ -5,6 +5,7 @@ import {
   SidebarTrigger,
 } from '@/components/ui/sidebar'
 import { requireBusiness } from '@/lib/businesses/current'
+import { countServices } from '@/lib/services/repository'
 import { PostHogProvider } from '@/providers/posthogProvider'
 
 export default async function DashboardLayout({
@@ -14,6 +15,7 @@ export default async function DashboardLayout({
 }) {
   // Redirects to /login, or to /onboarding when the user has no business.
   const { session, business, businesses } = await requireBusiness()
+  const serviceCount = await countServices(business._id)
 
   // PostHog wraps signed-in pages only. It must never load on the public
   // booking pages (TRD section 9).
@@ -27,6 +29,7 @@ export default async function DashboardLayout({
           }))}
           currentId={business._id.toHexString()}
           user={{ name: session.user.name, email: session.user.email }}
+          navMeta={{ Services: { count: serviceCount } }}
         />
         <SidebarInset>
           <header className="flex h-12 items-center border-b px-4 md:hidden">

@@ -176,3 +176,15 @@
   background-color: var(--destructive);
   color: var(--destructive-foreground);
 }
+
+/*
+ * Hatched strips: service buffers in the S4 preview. Stripes in
+ * --muted-foreground so they stay visible on the card in both modes.
+ */
+@utility bg-hatch {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--muted-foreground) 0 1.5px,
+    transparent 1.5px 6px
+  );
+}
