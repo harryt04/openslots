@@ -115,17 +115,34 @@ async function main() {
     }
     const fake = await start(true)
     try {
+      let how = 'at startup'
       if (!fake.early) {
-        const response = await fetch(origin + '/api/auth/get-session')
-        assert(
-          response.status >= 500,
-          `Fake auth was not refused: ${response.status}`,
+        // The server prints "Ready" a moment before its start-up check stops
+        // the process, so a request here either fails because the process
+        // has gone, or (on a build that only refuses on first use) gets a
+        // server error. Anything else means fake mode is running.
+        const response = await fetch(origin + '/api/auth/get-session').catch(
+          () => null,
         )
+        if (response) {
+          assert(
+            response.status >= 500,
+            `Fake auth was not refused: ${response.status}`,
+          )
+          how = 'on first auth use'
+        } else {
+          for (let i = 0; i < 100 && fake.child.exitCode === null; i++)
+            await delay(100)
+          assert.notEqual(
+            fake.child.exitCode,
+            null,
+            'The server kept running in fake mode',
+          )
+          assert.notEqual(fake.child.exitCode, 0)
+        }
         assert.match(fake.output(), /E2E_FAKE_GOOGLE/)
       }
-      console.log(
-        `Production fake-mode refusal: ${fake.early ? 'at startup' : 'on first auth use'}`,
-      )
+      console.log(`Production fake-mode refusal: ${how}`)
     } finally {
       await fake.stop()
     }
