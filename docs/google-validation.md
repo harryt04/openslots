@@ -33,3 +33,11 @@ References: [Better Auth Google](https://www.better-auth.com/docs/authentication
 - Untick a calendar permission on the Google consent screen at first sign-in, confirm the calendar is reported as needing a reconnect, then reconnect from the Calendars page (which uses `linkSocial`) with every permission ticked and confirm it recovers. A plain sign-out and sign-in does not update the stored scopes.
 - Choose a calendar shared with you read-only as the booking calendar and confirm a booking attempt reports a calendar error without marking the account as needing a reconnect.
 - After upgrading `better-auth`, re-run `apps/web/lib/auth-callback.test.ts`: the allowlist relies on its `user.validateUserInfo` option.
+
+## Slice 2C manual validation (not run live)
+
+1. Connect the sign-in account at `/calendars`. Confirm its primary calendar receives bookings, writable calendars initially block, and read-only calendars initially do not.
+2. Link another Google account with a different allowlisted email. Select that identity in Google's account chooser; confirm both remain linked to the owner. Connect the same account to another owned business and verify choices are independent.
+3. Share a read-only calendar with the owner. Refresh: it must offer a blocking switch but no booking destination button. Calendar listing must never request event details.
+4. Revoke OpenSlots access from Google account settings, expire the access token, and Refresh. Confirm Needs reconnect, its timestamp, sidebar warning and Bookings banner. Reconnect using the same Google identity and accept all scopes; confirm Refresh succeeds and warnings disappear. Plain sign-in is not a substitute.
+5. Change the booking destination, then unlink the former account. Verify only this business's link disappears; the Better Auth identity remains.

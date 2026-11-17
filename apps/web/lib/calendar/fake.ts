@@ -29,7 +29,14 @@ export function seedFakeCalendar(
 ) {
   const state: FakeState = {
     calendars: [
-      { id: 'primary', summary: 'Fake Google Calendar', accessRole: 'owner' },
+      {
+        id: 'primary',
+        summary: 'Fake Google Calendar',
+        primary: true,
+        accessRole: 'owner',
+      },
+      { id: 'personal', summary: 'Personal', accessRole: 'writer' },
+      { id: 'holidays', summary: 'Holidays', accessRole: 'reader' },
     ],
     busy: {},
     authFailure: false,

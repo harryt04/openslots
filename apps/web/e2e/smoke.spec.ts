@@ -107,23 +107,14 @@ test('login errors and fake calendar seeding', async ({ page, request }) => {
   await expect(page.locator('p[role=alert]')).toHaveText(
     'Unable to sign in. Please try again.',
   )
-  const seed = await request.put('/dev/calendar?accountId=e2e-google-account', {
-    data: {
-      busy: {
-        primary: [
-          { start: '2026-12-01T10:00:00Z', end: '2026-12-01T11:00:00Z' },
-        ],
-      },
-    },
-  })
-  expect(seed.ok()).toBeTruthy()
   expect(
     (
-      await (
-        await request.get('/dev/calendar?accountId=e2e-google-account')
-      ).json()
-    ).busy.primary,
-  ).toHaveLength(1)
+      await request.put('/dev/calendar?accountId=someone-else', {
+        data: {},
+        maxRedirects: 0,
+      })
+    ).status(),
+  ).not.toBe(200)
   for (const endpoint of [
     'get-access-token',
     'refresh-token',

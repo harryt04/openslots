@@ -71,3 +71,7 @@ The default account has a writable `primary` calendar. Server-side tests can cal
 records events and create/update/delete operations. State survives module reloads
 in the development server through globalThis, and is lost on server exit.
 The email/password route at /dev/sign-in remains fake-only and is absent in production.
+
+## Calendar links contract
+
+Slice 3A uses `calendarAvailability(business)` from `apps/web/lib/calendar-links/repository.ts` before querying slots or writing a booking. It returns blocking calendar account/user references and the booking destination, or `calendar_unavailable`; never bypass a failed result. On provider `CalendarAuthError`, call `markNeedsReconnect(business._id, accountId)`. Other errors must not change reconnect status. Calendar links persist `writable` from CalendarList permissions; event details are never read.
