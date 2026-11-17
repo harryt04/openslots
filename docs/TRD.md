@@ -15,7 +15,7 @@ Items marked **Verify** are believed correct but must be confirmed against curre
 | Auth | Better Auth, Google social provider only, MongoDB adapter |
 | Database | MongoDB, native driver. Must work on a standalone server: **no multi-document transactions** |
 | Analytics | PostHog, disabled unless a key is configured |
-| Dates | `date-fns` with `@date-fns/tz` (or `Temporal` if stable in Node 26). All stored instants are UTC `Date` |
+| Dates | `@date-fns/tz` (`tzOffset`, which reads the runtime's `Intl` data) in `@openslots/core`; calendar dates are `YYYY-MM-DD` strings. Not `Temporal`: Node 26 has it, but `@openslots/core` also runs in customers' browsers, where it is not yet universal. All stored instants are UTC `Date` |
 | Tests | Vitest (unit, integration), Playwright (end to end) |
 | Package build | `tsup` for `@openslots/react` and `@openslots/core` |
 
@@ -74,15 +74,19 @@ computeSlots(input: {
 
 Rules, in order:
 
-1. For each local date in range, take override ranges if an override exists for that date, otherwise the weekday's ranges.
-2. Convert each range to UTC instants using the schedule timezone on that date. A range that crosses a daylight saving change uses wall-clock times; a start time that does not exist on that date is skipped.
-3. Candidate starts step through the range every `startIntervalMin`, beginning at the range start.
-4. Keep a candidate only if `start + durationMin` is within the range. Buffers may extend outside working hours.
-5. Drop it if `[start − bufferBefore, start + duration + bufferAfter)` overlaps any busy interval.
-6. Drop it if `start < now + minNoticeMin` or its local date is beyond `now + windowDays`.
+1. For each local date in range, take override ranges if an override exists for that date, otherwise the weekday's ranges (`weekly[0]` is Sunday, `weekly[6]` Saturday).
+2. Convert each range to UTC instants using the schedule timezone on that date. A range that crosses a daylight saving change uses wall-clock times; a start time that does not exist on that date is skipped. A wall time that occurs twice (fall-back) means its first occurrence. A range end that does not exist moves forward past the gap. `endMin` may be 1440, midnight at the end of the date.
+3. Candidate starts step through the range every `startIntervalMin` of wall-clock time, beginning at the range start.
+4. Keep a candidate only if `start + durationMin` (real elapsed time) is within the range. Buffers may extend outside working hours.
+5. Drop it if `[start − bufferBefore, start + duration + bufferAfter)` overlaps any busy interval. All intervals are half-open, so touching is not overlapping.
+6. Drop it if `start < now + minNoticeMin` or its local date is after (the schedule-local date of `now`) + `windowDays`.
 7. Drop all candidates on a date that already has `maxPerDay` bookings.
 
-Required tests: spring-forward and fall-back days in `America/Denver` and `Europe/London`; a customer timezone a day ahead of the business; multiple ranges in a day; overrides that close, shorten and open a day; buffers; a 180 minute service starting hourly; the exact scenario drawn in screen S4. The admin preview (S4-3) and the API both call this function.
+The result has a key for every date in `range`, with an empty list when nothing is open, and starts in ascending order. Schedule times, durations, buffers and intervals are all multiples of 5 minutes (enforced by the zod schemas), so every start lands on a lock block.
+
+`@openslots/core` also exports the helpers the other slices need: `groupSlotsByDate(slots, tz, range?)` regroups a result by date in the customer's timezone, dropping empty dates (the API asks the engine for one schedule-local day either side of the customer's range and trims with `range`); `lockBlocks` lists a booking's `slot_locks` blocks (section 5); `occupiedInterval` turns an existing booking into a busy interval including its buffers.
+
+Required tests: spring-forward and fall-back days in `America/Denver` and `Europe/London`; a customer timezone a day ahead of the business; multiple ranges in a day; overrides that close, shorten and open a day; buffers; a 180 minute service starting hourly; minimum notice, booking window and daily cap; the exact scenario drawn in screen S4. In that scenario (Wednesday 2 December 2026, open 9:00 to 18:00, busy 13:00 to 14:00, 180 minutes plus 15 after, hourly) the engine returns 09:00, 14:00 and 15:00; the drawing shows only 9:00 and 2:00 because overlapping blocks cannot both be drawn. The admin preview (S4-3) and the API both call this function.
 
 ## 5. Booking write path (R7, R8)
 
@@ -114,14 +118,28 @@ Because all service durations and intervals are multiples of 5 minutes, block al
 
 ## 7. Public API (`/api/v1`)
 
-Every request carries `X-OpenSlots-Key: os_pk_…`. The server resolves the business from the key and checks the `Origin` header against the business's allowed origins; the instance's own origin is always allowed. CORS headers echo only an allowed origin. Errors are `{ error: { code, message } }`.
+Every request carries `X-OpenSlots-Key: os_pk_…`. The server resolves the business from the key and checks the `Origin` header against the business's allowed origins; the instance's own origin is always allowed. CORS headers echo only an allowed origin. Errors are `{ error: { code, message } }`, with these codes:
+
+| Code | Status | When |
+| --- | --- | --- |
+| `invalid_request` | 400 | zod validation failed |
+| `invalid_key` | 401 | missing or unknown publishable key |
+| `origin_not_allowed` | 403 | `Origin` is not an allowed origin |
+| `not_found` | 404 | unknown service or manage token |
+| `slot_taken` | 409 | the start is no longer open |
+| `booking_not_changeable` | 409 | cancel or reschedule of a booking that is cancelled or in the past |
+| `rate_limited` | 429 | over the rate limit |
+| `internal_error` | 500 | anything unexpected |
+| `calendar_unavailable` | 502 | Google failed, or a blocking calendar needs reconnecting |
+
+The request and response shapes below are zod schemas in `@openslots/core` (`packages/core/src/api.ts`); the server and `@openslots/react` both import them.
 
 | Method and path | Purpose | Notes |
 | --- | --- | --- |
 | `GET /business` | Business name, timezone, active services | Cacheable for 60 seconds |
-| `GET /slots?service=&from=&to=&tz=` | Open slots | `from`/`to` are dates, at most 62 days apart. Returns `{ timezone, days: { 'YYYY-MM-DD': ['ISO start', …] } }` grouped by date in `tz` |
-| `POST /bookings` | Create a booking | Body `{ serviceId, start, timezone, customer: { name, email, phone?, notes? } }`. `201 { id, start, end, manageUrl }`, or `409 slot_taken` |
-| `GET /manage/:token` | Booking summary for the manage page | Token is 32 random bytes, base64url; only its SHA-256 hash is stored |
+| `GET /slots?service=&from=&to=&tz=` | Open slots | `from`/`to` are dates in `tz`, at most 62 days apart; `tz` defaults to the business timezone. Returns `{ timezone, days: { 'YYYY-MM-DD': ['ISO start', …] }, reason? }` grouped by date in `tz`, only dates with slots. `reason: 'calendar_unavailable'` when slots are withheld (section 6) |
+| `POST /bookings` | Create a booking | Body `{ serviceId, start, timezone, customer: { name, email, phone?, notes? }, website? }`; `website` is the honeypot. `201 { id, start, end, manageUrl }`, or `409 slot_taken` |
+| `GET /manage/:token` | Booking summary for the manage page: `{ id, status, start, end, timezone, service, business, customer: { name, email } }`. Cancel and reschedule return the same shape | Token is 32 random bytes, base64url; only its SHA-256 hash is stored |
 | `POST /manage/:token/cancel` | Cancel | |
 | `POST /manage/:token/reschedule` | Move to `{ start }` | Same rules as create |
 
