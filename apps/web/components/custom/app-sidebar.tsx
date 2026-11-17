@@ -80,7 +80,7 @@ function BusinessAvatar({ name }: { name: string }) {
   return (
     <span
       aria-hidden="true"
-      className="grid size-7 flex-none place-items-center rounded-[7px] bg-linear-to-br from-primary to-accent-strong text-[11px] font-bold text-primary-foreground"
+      className="grid size-7 flex-none place-items-center rounded-[7px] bg-primary text-[11px] font-bold text-primary-foreground"
     >
       {initials(name)}
     </span>
@@ -120,9 +120,7 @@ function NavLink({
               aria-label="Needs attention"
             />
           ) : meta?.count !== undefined ? (
-            <span className="ml-auto font-mono text-[11px] opacity-80">
-              {meta.count}
-            </span>
+            <span className="ml-auto font-mono text-[11px]">{meta.count}</span>
           ) : null}
         </Link>
       </SidebarMenuButton>
