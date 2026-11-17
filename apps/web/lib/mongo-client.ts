@@ -30,6 +30,7 @@ export const mongoDBConfig = {
     services: 'services',
     schedules: 'schedules',
     calendarLinks: 'calendar_links',
+    calendarLinkReturns: 'calendar_link_returns',
     bookings: 'bookings',
     slotLocks: 'slot_locks',
   },

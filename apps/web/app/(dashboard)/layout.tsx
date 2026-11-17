@@ -1,3 +1,4 @@
+import { listLinks } from '@/lib/calendar-links/repository'
 import { AppSidebar } from '@/components/custom/app-sidebar'
 import {
   SidebarInset,
@@ -15,7 +16,13 @@ export default async function DashboardLayout({
 }) {
   // Redirects to /login, or to /onboarding when the user has no business.
   const { session, business, businesses } = await requireBusiness()
-  const serviceCount = await countServices(business._id)
+  const [serviceCount, links] = await Promise.all([
+    countServices(business._id),
+    listLinks(business._id),
+  ])
+  const calendarsNeedAttention = links.some(
+    (l) => l.status === 'needs_reconnect',
+  )
 
   // PostHog wraps signed-in pages only. It must never load on the public
   // booking pages (TRD section 9).
@@ -29,7 +36,10 @@ export default async function DashboardLayout({
           }))}
           currentId={business._id.toHexString()}
           user={{ name: session.user.name, email: session.user.email }}
-          navMeta={{ Services: { count: serviceCount } }}
+          navMeta={{
+            Services: { count: serviceCount },
+            Calendars: { attention: calendarsNeedAttention },
+          }}
         />
         <SidebarInset>
           <header className="flex h-12 items-center border-b px-4 md:hidden">

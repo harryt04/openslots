@@ -33,3 +33,20 @@ References: [Better Auth Google](https://www.better-auth.com/docs/authentication
 - Untick a calendar permission on the Google consent screen at first sign-in, confirm the calendar is reported as needing a reconnect, then reconnect from the Calendars page (which uses `linkSocial`) with every permission ticked and confirm it recovers. A plain sign-out and sign-in does not update the stored scopes.
 - Choose a calendar shared with you read-only as the booking calendar and confirm a booking attempt reports a calendar error without marking the account as needing a reconnect.
 - After upgrading `better-auth`, re-run `apps/web/lib/auth-callback.test.ts`: the allowlist relies on its `user.validateUserInfo` option.
+
+## Slice 2C manual validation (not run live)
+
+1. Connect the sign-in account at `/calendars`. Confirm its primary calendar receives bookings, writable calendars initially block, and read-only calendars initially do not.
+2. Link another Google account with a different allowlisted email. Select that identity in Google's account chooser; confirm both remain linked to the owner. Connect the same account to another owned business and verify choices are independent.
+3. Share a read-only calendar with the owner. Refresh: it must offer a blocking switch but no booking destination button. Calendar listing must never request event details.
+4. Revoke OpenSlots access from Google account settings, expire the access token, and Refresh. Confirm Needs reconnect, its timestamp, sidebar warning and Bookings banner. Reconnect using the same Google identity and accept all scopes; confirm Refresh succeeds and warnings disappear. Plain sign-in is not a substitute.
+5. Change the booking destination, then unlink the former account. Verify only this business's link disappears; the Better Auth identity remains.
+
+
+### Review fixes (no live Google validation)
+
+- Linking snapshots the owner's accounts in a ten-minute, single-use server record. The return handler connects exactly one new identity, or refreshes only the named reconnect identity. Visit `/calendars?linked=1` and verify it changes nothing. Replay a return URL, switch businesses before returning, and try it as another owner: none may connect accounts.
+- Unlink an account, link/reconnect another, and confirm the unlinked account remains available only through its explicit Connect button. Repeat in a second business.
+- Remove the selected calendar or change it to read-only, then Refresh. Confirm the destination moves and the save message explains it. With no healthy writable calendar, confirm No booking calendar on Calendars and Bookings and no availability. Unlink the last account and confirm the same state.
+- Real account records have no email field. Read the verified email claim from the Google id token stored by Better Auth's validated OAuth exchange. For older accounts without that token, use the primary calendar's name (or Google account), never the owner's email. Fake accounts have explicit fixture emails. Validate the real secondary identity label manually; this has not been tested live.
+- Better Auth 1.7.25 `dist/api/routes/callback.mjs` invokes `linkOAuthAccount`; `dist/oauth2/link-account.mjs` calls `assertValidUserInfo` with the fresh linked identity and action `link-account` before account creation/update. The handler test now exercises refusal of a second identity outside the allowlist.
