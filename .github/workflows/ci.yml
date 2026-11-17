@@ -84,14 +84,17 @@ jobs:
           test "$(docker compose exec -T app id -u)" != "0"
       - name: Fake mode is refused in production
         run: |
-          set -eu
-          if docker run --rm -e E2E_FAKE_GOOGLE=1 -e MONGO_CONNECTION_STRING=mongodb://x:27017 \
-               -e BETTER_AUTH_SECRET=ci-secret-min-32-chars-long!!!!!! -e BETTER_AUTH_URL=http://localhost:3000 \
-               openslots:local node -e "import('./apps/web/server.js')" 2>&1 | tee /tmp/fake.log | grep -q "must not be set"; then
-            echo "refused as expected"
-          else
-            echo "::warning::Could not confirm the refusal message from a cold start; see log"; cat /tmp/fake.log | tail -20
-          fi
+          set -u
+          # The server must exit by itself with the refusal message. `timeout`
+          # turns a server that starts anyway into a failure.
+          timeout 60 docker run --rm -e E2E_FAKE_GOOGLE=1 \
+            -e MONGO_CONNECTION_STRING=mongodb://127.0.0.1:27017 \
+            -e BETTER_AUTH_SECRET -e BETTER_AUTH_URL \
+            openslots:local > /tmp/fake.log 2>&1
+          status=$?
+          tail -20 /tmp/fake.log
+          test "$status" -ne 0 && test "$status" -ne 124
+          grep -q "must not be set" /tmp/fake.log
       - name: Logs on failure
         if: failure()
         run: docker compose logs --no-color | tail -200
