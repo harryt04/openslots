@@ -203,3 +203,50 @@ it('passes a deadline and treats timeouts as transient', async () => {
   ).rejects.toBeInstanceOf(CalendarError)
   expect(request.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal)
 })
+
+it('checks the deadline after token acquisition immediately before fetch', async () => {
+  const request = vi.fn<typeof fetch>()
+  const provider = new GoogleCalendarProvider(async () => 'token', request)
+  await expect(
+    provider.createEvent('primary', event, Date.now() - 1),
+  ).rejects.toBeInstanceOf(CalendarError)
+  await expect(
+    provider.updateEvent('primary', 'id', event, Date.now() - 1),
+  ).rejects.toBeInstanceOf(CalendarError)
+  await expect(
+    provider.deleteEvent('primary', 'id', Date.now() - 1),
+  ).rejects.toBeInstanceOf(CalendarError)
+  expect(request).not.toHaveBeenCalled()
+})
+it('a paused fake patch cannot land after its deadline and cancelled events restore on patch', async () => {
+  const state = seedFakeCalendar('deadline')
+  const provider = new FakeCalendarProvider('deadline')
+  const { id } = await provider.createEvent('primary', {
+    ...event,
+    id: 'stable',
+  })
+  await provider.deleteEvent('primary', id)
+  await provider.createEvent('primary', { ...event, id })
+  expect(state.events[id]!.event.status).toBe('cancelled')
+  await provider.updateEvent('primary', id, { ...event, status: 'confirmed' })
+  expect(state.events[id]!.event.status).toBe('confirmed')
+  let resume!: () => void
+  state.pause = () =>
+    new Promise<void>((resolve) => {
+      resume = resolve
+    })
+  const pending = provider.updateEvent(
+    'primary',
+    id,
+    { ...event, summary: 'stale' },
+    Date.now() + 1000,
+  )
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2000)
+  resume()
+  try {
+    await expect(pending).rejects.toBeInstanceOf(CalendarError)
+  } finally {
+    clock.mockRestore()
+  }
+  expect(state.events[id]!.event.summary).toBe('Booking')
+})

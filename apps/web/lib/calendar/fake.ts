@@ -69,7 +69,9 @@ export class FakeCalendarProvider implements CalendarProvider {
           [
             ...(state.busy[id] ?? []),
             ...Object.values(state.events)
-              .filter((e) => e.calendarId === id)
+              .filter(
+                (e) => e.calendarId === id && e.event.status !== 'cancelled',
+              )
               .map((e) => ({
                 start: e.event.start.dateTime,
                 end: e.event.end.dateTime,
@@ -83,10 +85,16 @@ export class FakeCalendarProvider implements CalendarProvider {
       ]),
     )
   }
-  async createEvent(calendarId: string, event: CalendarEvent) {
+  async createEvent(
+    calendarId: string,
+    event: CalendarEvent,
+    notAfter?: number,
+  ) {
     const state = this.state(),
       id = event.id ?? crypto.randomUUID()
     await state.pause?.('create')
+    if (notAfter !== undefined && Date.now() >= notAfter)
+      throw new CalendarError(503)
     if (state.events[id]) return { id }
     state.events[id] = { calendarId, event: structuredClone(event) }
     state.operations.push({
@@ -97,9 +105,16 @@ export class FakeCalendarProvider implements CalendarProvider {
     })
     return { id }
   }
-  async updateEvent(calendarId: string, eventId: string, event: CalendarEvent) {
+  async updateEvent(
+    calendarId: string,
+    eventId: string,
+    event: CalendarEvent,
+    notAfter?: number,
+  ) {
     const state = this.state()
     await state.pause?.('update')
+    if (notAfter !== undefined && Date.now() >= notAfter)
+      throw new CalendarError(503)
     if (!state.events[eventId]) throw new CalendarError(404)
     state.events[eventId] = {
       calendarId,
@@ -119,10 +134,12 @@ export class FakeCalendarProvider implements CalendarProvider {
       event: structuredClone(event),
     })
   }
-  async deleteEvent(calendarId: string, eventId: string) {
+  async deleteEvent(calendarId: string, eventId: string, notAfter?: number) {
     const state = this.state()
     await state.pause?.('delete')
-    delete state.events[eventId]
+    if (notAfter !== undefined && Date.now() >= notAfter)
+      throw new CalendarError(503)
+    if (state.events[eventId]) state.events[eventId].event.status = 'cancelled'
     state.operations.push({ kind: 'delete', calendarId, eventId })
   }
 }

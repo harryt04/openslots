@@ -13,6 +13,7 @@ export type BookingDoc = {
   start: Date
   end: Date
   status: 'pending' | 'confirmed' | 'cancelled'
+  lastWriteId?: string
   rev: number
   opId: string
   prevOpId?: string
@@ -27,6 +28,9 @@ export type BookingDoc = {
   cleanup?: true
   eventSync?: true
   purgeAfter?: Date
+  retryAt?: Date
+  retryCount?: number
+  locksReleased?: true
   syncAt?: Date
   customer: {
     name: string

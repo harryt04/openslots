@@ -6,6 +6,7 @@ export type Calendar = {
   primary?: boolean
 }
 export type CalendarEvent = {
+  status?: 'confirmed' | 'cancelled'
   id?: string
   summary: string
   description?: string
@@ -20,13 +21,22 @@ export interface CalendarProvider {
     from: string,
     to: string,
   ): Promise<Record<string, Interval[]>>
-  createEvent(calendarId: string, event: CalendarEvent): Promise<{ id: string }>
+  createEvent(
+    calendarId: string,
+    event: CalendarEvent,
+    notAfter?: number,
+  ): Promise<{ id: string }>
   updateEvent(
     calendarId: string,
     eventId: string,
     event: CalendarEvent,
+    notAfter?: number,
   ): Promise<void>
-  deleteEvent(calendarId: string, eventId: string): Promise<void>
+  deleteEvent(
+    calendarId: string,
+    eventId: string,
+    notAfter?: number,
+  ): Promise<void>
 }
 export class CalendarAuthError extends Error {
   constructor() {
