@@ -204,3 +204,49 @@ describe('createClient', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('createClient host', () => {
+  async function urlFor(host: string) {
+    const fetch = respond(200, MOCK_BUSINESS)
+    const client = createClient({ host, publishableKey: MOCK_KEY, fetch })
+    await client.getBusiness()
+    return { url: String(fetch.mock.calls[0]![0]), host: client.host }
+  }
+
+  it('accepts trailing slashes, path prefixes and same-origin paths', async () => {
+    expect(await urlFor('https://slots.example.com')).toEqual({
+      url: 'https://slots.example.com/api/v1/business',
+      host: 'https://slots.example.com',
+    })
+    expect((await urlFor('https://Slots.Example.com:8443//')).url).toBe(
+      'https://slots.example.com:8443/api/v1/business',
+    )
+    expect((await urlFor('  https://example.com/booking/  ')).url).toBe(
+      'https://example.com/booking/api/v1/business',
+    )
+    expect((await urlFor('/booking/')).url).toBe('/booking/api/v1/business')
+    expect((await urlFor('')).url).toBe('/api/v1/business')
+  })
+
+  it('refuses a host that would produce wrong endpoint URLs', () => {
+    for (const host of [
+      'https://slots.example.com/?tenant=1',
+      'https://slots.example.com?',
+      'https://slots.example.com/#top',
+      'https://user:pass@slots.example.com',
+      'ftp://slots.example.com',
+      'javascript:alert(1)',
+      'slots.example.com',
+      '//slots.example.com',
+      'https://',
+    ]) {
+      expect(
+        () => createClient({ host, publishableKey: MOCK_KEY }),
+        host,
+      ).toThrow(TypeError)
+    }
+    expect(() =>
+      createClient({ host: 'https://x.example/?a', publishableKey: MOCK_KEY }),
+    ).toThrow(/must not include a query string/)
+  })
+})

@@ -4,14 +4,21 @@ import type { CreateBookingResponse, PublicService } from '@openslots/core'
 import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
 
 import { customerMessage, isOpenSlotsError } from '../errors'
-import { useBusiness, useClient, type Connection } from '../hooks'
+import {
+  connectionKey,
+  useBusiness,
+  useClient,
+  type Connection,
+} from '../hooks'
 import {
   formatDateLong,
   formatDateShort,
-  formatTime,
+  formatTimeClear,
   formatTimeRange,
+  isAmbiguousTime,
   localDateOf,
   timeZoneLabel,
+  zoneAbbreviation,
 } from '../time'
 import {
   DetailsForm,
@@ -44,11 +51,18 @@ export interface BookedResult extends CreateBookingResponse {
 }
 
 export type BookingFlowProps = Connection & {
-  /** A service id or slug. When given, the service step is skipped. */
+  /**
+   * A service id or slug. When given, the service step is skipped. A later
+   * change (to another service, or of `host`, `publishableKey` or
+   * `client`) clears the chosen time and returns to the time step.
+   */
   service?: string
   /** Called once the booking exists. */
   onBooked?: (booking: BookedResult) => void
-  /** The customer's timezone. Detected from the device when not given. */
+  /**
+   * The customer's timezone. Detected from the device when not given. A
+   * later change of the prop is applied; the customer can still change it.
+   */
   timezone?: string
   theme?: Theme
   className?: string
@@ -69,6 +83,31 @@ export interface BookingFlowInitialState {
 
 interface InternalProps {
   initial?: BookingFlowInitialState
+}
+
+/**
+ * What the confirmation shows: a snapshot of what was submitted and what the
+ * server returned, never the flow's current selection.
+ */
+interface Confirmation {
+  booking: CreateBookingResponse
+  service: PublicService
+  timezone: string
+  email: string
+  businessName: string
+  businessTimezone: string
+}
+
+/** The manage link, only if it is an http(s) URL; anything else is dropped. */
+export function safeManageUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:'
+      ? parsed.href
+      : null
+  } catch {
+    return null
+  }
 }
 
 /** The whole journey: service, day and time, details, confirmation (S8). */
@@ -109,9 +148,11 @@ export function Flow({
   const [submitError, setSubmitError] = useState<unknown>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
-  const [booking, setBooking] = useState<CreateBookingResponse | null>(
-    initial?.booking ?? null,
-  )
+  const [confirmed, setConfirmed] = useState<Confirmation | null>(null)
+  // The gallery's "success" state: a booking that is shown as soon as the
+  // business has loaded.
+  const [initialBooking, setInitialBooking] =
+    useState<CreateBookingResponse | null>(initial?.booking ?? null)
 
   const services = business.data?.services ?? []
   const fixed = serviceProp
@@ -119,6 +160,44 @@ export function Flow({
     : undefined
   const service = fixed ?? services.find((s) => s.id === serviceId)
 
+  // A submission in flight, checked synchronously so a rapid double submit
+  // cannot send two requests. While it is set the journey is locked.
+  const inFlight = useRef(false)
+  // Bumped when the host changes the service or connection, so an error
+  // from an older submission is not shown in the new journey.
+  const journey = useRef(0)
+
+  // What the selection belongs to: the connection and, when the host fixes
+  // the service, the resolved service. Null while a fixed service is still
+  // being resolved, which is not a change.
+  const connKey = connectionKey(connection)
+  const serviceIdentity =
+    serviceProp === undefined
+      ? 'any'
+      : business.data
+        ? (fixed?.id ?? `missing:${serviceProp}`)
+        : null
+  const identity =
+    serviceIdentity === null ? null : `${connKey}|${serviceIdentity}`
+  const [owner, setOwner] = useState(identity)
+  if (identity !== null && identity !== owner) {
+    setOwner(identity)
+    if (owner !== null) {
+      // The host changed what is being booked: start this part over.
+      setStart(null)
+      setDay(null)
+      setNotice(null)
+      setSubmitError(null)
+      setConfirmed(null)
+      setInitialBooking(null)
+      if (serviceProp === undefined) {
+        setServiceId(null)
+        setStep('service')
+      } else {
+        setStep('time')
+      }
+    }
+  }
   // Move focus to the new step's heading, but not on first render.
   const headingRef = useRef<HTMLHeadingElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
@@ -150,6 +229,10 @@ export function Flow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [service?.id])
 
+  useEffect(() => {
+    if (owner !== null) journey.current += 1
+  }, [owner])
+
   function go(next: BookingStep) {
     setStep(next)
   }
@@ -163,6 +246,7 @@ export function Flow({
   }
 
   function back() {
+    if (inFlight.current) return
     setSubmitError(null)
     if (step === 'details') go('time')
     else if (step === 'time' && !fixed) {
@@ -180,7 +264,8 @@ export function Flow({
   }
 
   async function submit() {
-    if (!service || !start || !timezone) return
+    if (inFlight.current) return
+    if (!service || !start || !timezone || !business.data) return
     const result = validateCustomer(draft, service)
     if (result.errors) {
       setShowErrors(true)
@@ -198,6 +283,16 @@ export function Flow({
     setErrors({})
     setSubmitError(null)
     setSubmitting(true)
+    inFlight.current = true
+    // Everything the confirmation needs, as it is now.
+    const submitted = {
+      service,
+      timezone,
+      email: result.data.email,
+      businessName: business.data.name,
+      businessTimezone: business.data.timezone,
+    }
+    const attempt = journey.current
     try {
       const response = await client.createBooking({
         serviceId: service.id,
@@ -207,11 +302,18 @@ export function Flow({
         website,
       })
       if (!mounted.current) return
-      setBooking(response)
+      // The booking exists, so it is confirmed even if the host changed the
+      // service meanwhile; the snapshot says what was actually booked.
+      setConfirmed({ ...submitted, booking: response })
+      setInitialBooking(null)
       go('done')
-      onBooked?.({ ...response, service, timezone })
+      onBooked?.({
+        ...response,
+        service: submitted.service,
+        timezone: submitted.timezone,
+      })
     } catch (error) {
-      if (!mounted.current) return
+      if (!mounted.current || attempt !== journey.current) return
       if (isOpenSlotsError(error) && error.code === 'slot_taken') {
         // S8-4: back to the times, freshly loaded, with a plain message,
         // on the same day.
@@ -224,12 +326,14 @@ export function Flow({
         setSubmitError(error)
       }
     } finally {
+      inFlight.current = false
       if (mounted.current) setSubmitting(false)
     }
   }
 
   function bookAnother() {
-    setBooking(null)
+    setConfirmed(null)
+    setInitialBooking(null)
     setStart(null)
     setDay(null)
     setNotice(null)
@@ -252,8 +356,29 @@ export function Flow({
   const panelBorder =
     'os:border-b os:border-border os:@min-[760px]:border-b-0 os:@min-[760px]:border-r'
 
+  const shown: Confirmation | null =
+    confirmed ??
+    (initialBooking && service && business.data && timezone
+      ? {
+          booking: initialBooking,
+          service,
+          timezone,
+          email: draft.email.trim(),
+          businessName: business.data.name,
+          businessTimezone: business.data.timezone,
+        }
+      : null)
+
   let content: ReactNode
-  if (!business.data || !timezone) {
+  if (step === 'done' && shown) {
+    content = (
+      <Done
+        confirmation={shown}
+        onAgain={bookAnother}
+        headingRef={headingRef}
+      />
+    )
+  } else if (!business.data || !timezone) {
     content = (
       <div className="os:p-5">
         {business.error ? (
@@ -305,19 +430,6 @@ export function Flow({
         <ServiceButtons services={services} onSelect={chooseService} />
       </div>
     )
-  } else if (step === 'done' && booking) {
-    content = (
-      <Done
-        booking={booking}
-        service={service}
-        businessName={business.data.name}
-        businessTimezone={business.data.timezone}
-        timezone={timezone}
-        email={draft.email.trim()}
-        onAgain={bookAnother}
-        headingRef={headingRef}
-      />
-    )
   } else {
     const info = (
       <Info
@@ -329,6 +441,7 @@ export function Flow({
         timezone={timezone}
         onTimezoneChange={setTimezone}
         onBack={step === 'time' && fixed ? undefined : back}
+        backDisabled={submitting}
         headingRef={step === 'time' ? headingRef : undefined}
         className={cx('os:p-5', panelBorder)}
       />
@@ -338,9 +451,12 @@ export function Flow({
         <div className={three}>
           {info}
           <SlotPanels
+            key={`${connKey}|${service.id}`}
             connection={connection}
             serviceId={service.id}
             durationMin={service.durationMin}
+            windowDays={service.windowDays}
+            businessTimezone={business.data.timezone}
             value={start}
             onChange={(slot) => {
               setStart(slot?.start ?? null)
@@ -460,6 +576,7 @@ function Info({
   timezone,
   onTimezoneChange,
   onBack,
+  backDisabled,
   headingRef,
   className,
 }: {
@@ -471,6 +588,7 @@ function Info({
   timezone: string
   onTimezoneChange: (tz: string) => void
   onBack?: () => void
+  backDisabled?: boolean
   headingRef?: Ref<HTMLHeadingElement>
   className?: string
 }) {
@@ -507,12 +625,14 @@ function Info({
       {start ? (
         <Meta icon="calendar" strong>
           {formatDateShort(localDateOf(new Date(start), timezone))} ·{' '}
-          <span className="os:font-mono">{formatTime(start, timezone)}</span>
+          <span className="os:font-mono">
+            {formatTimeClear(start, timezone)}
+          </span>
           {differs ? (
             <span className="os:block os:text-xs os:font-normal os:text-muted-foreground">
               {formatDateShort(localDateOf(new Date(start), businessTimezone))},{' '}
               <span className="os:font-mono">
-                {formatTime(start, businessTimezone)}
+                {formatTimeClear(start, businessTimezone)}
               </span>{' '}
               {timeZoneLabel(businessTimezone)}
             </span>
@@ -535,6 +655,7 @@ function Info({
           type="button"
           className={cx(button.ghost, 'os:mt-3.5 os:pl-1 os:-ml-1')}
           onClick={onBack}
+          disabled={backDisabled}
         >
           <Icon name="chevronLeft" />
           Back
@@ -545,27 +666,20 @@ function Info({
 }
 
 function Done({
-  booking,
-  service,
-  businessName,
-  businessTimezone,
-  timezone,
-  email,
+  confirmation,
   onAgain,
   headingRef,
 }: {
-  booking: CreateBookingResponse
-  service: PublicService
-  businessName: string
-  businessTimezone: string
-  timezone: string
-  email: string
+  confirmation: Confirmation
   onAgain: () => void
   headingRef: Ref<HTMLHeadingElement>
 }) {
+  const { booking, service, businessName, businessTimezone, timezone, email } =
+    confirmation
   const date = localDateOf(new Date(booking.start), timezone)
-  const end = booking.end
   const differs = businessTimezone !== timezone
+  const manageUrl = safeManageUrl(booking.manageUrl)
+  const range = formatTimeRange(booking.start, booking.end, timezone)
   return (
     <div className="os:px-6 os:py-9 os:text-center">
       <span className="os:mx-auto os:mb-3.5 os:grid os:place-items-center os:w-[52px] os:h-[52px] os:rounded-full os:bg-primary os:text-primary-foreground">
@@ -584,29 +698,39 @@ function Done({
       <p className="os:mt-2.5 os:font-semibold">
         {formatDateLong(date)} ·{' '}
         <span className="os:font-mono">
-          {formatTimeRange(booking.start, end, timezone)}
+          {isAmbiguousTime(booking.start, timezone)
+            ? `${range} (starts ${zoneAbbreviation(booking.start, timezone)})`
+            : range}
         </span>
       </p>
       <p className="os:text-sm os:text-muted-foreground">
         {timeZoneLabel(timezone)}
         {differs
-          ? ` · ${formatDateShort(localDateOf(new Date(booking.start), businessTimezone))}, ${formatTime(booking.start, businessTimezone)} ${timeZoneLabel(businessTimezone)}`
+          ? ` · ${formatDateShort(localDateOf(new Date(booking.start), businessTimezone))}, ${formatTimeClear(booking.start, businessTimezone)} ${timeZoneLabel(businessTimezone)}`
           : null}
       </p>
       <p className="os:mt-2.5 os:text-sm os:text-muted-foreground">
         A calendar invitation is on its way to {email || 'your email'}.
       </p>
+      {manageUrl ? null : (
+        <p className="os:mt-2.5 os:text-sm os:text-muted-foreground">
+          Your booking is confirmed. The link to reschedule or cancel isn&apos;t
+          available here; use the one in your calendar invitation.
+        </p>
+      )}
       <div className="os:mt-4.5 os:flex os:flex-wrap os:justify-center os:gap-2">
-        <a
-          href={booking.manageUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={button.outline}
-        >
-          Reschedule or cancel
-          <Icon name="link" size={14} />
-          <VisuallyHidden> (opens in a new tab)</VisuallyHidden>
-        </a>
+        {manageUrl ? (
+          <a
+            href={manageUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={button.outline}
+          >
+            Reschedule or cancel
+            <Icon name="link" size={14} />
+            <VisuallyHidden> (opens in a new tab)</VisuallyHidden>
+          </a>
+        ) : null}
         <button type="button" className={button.ghost} onClick={onAgain}>
           Book another
         </button>

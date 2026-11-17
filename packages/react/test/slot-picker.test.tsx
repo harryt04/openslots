@@ -154,6 +154,236 @@ describe('SlotPicker', () => {
   })
 })
 
+describe('SlotPicker props after mount', () => {
+  const base = { host: MOCK_HOST, publishableKey: MOCK_KEY }
+  const pressed = () =>
+    screen
+      .queryAllByRole('button', { pressed: true })
+      .map((b) => b.getAttribute('aria-label'))
+
+  it('clears a controlled value when the service changes', async () => {
+    const api = createMockApi({ now: () => NOW })
+    const onChange = vi.fn()
+    const props = {
+      ...base,
+      fetch: api.fetch,
+      timezone: 'America/Denver',
+      onChange,
+    }
+    const value = '2026-12-03T16:00:00.000Z'
+    const { rerender } = render(
+      <SlotPicker {...props} service="cut-and-style" value={value} />,
+    )
+    await waitFor(() =>
+      expect(pressed()).toEqual([expect.stringMatching(/^9:00 AM,/)]),
+    )
+
+    rerender(<SlotPicker {...props} service="trim" value={value} />)
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(null))
+    expect(onChange).toHaveBeenCalledTimes(1)
+    // Trim also offers 9:00 AM, but the old value is not shown as chosen.
+    await userEvent.setup().click(
+      await screen.findByRole('button', {
+        name: /^Thursday, December 3, 2026, \d+ times/,
+      }),
+    )
+    expect(
+      await screen.findByRole('button', { name: /^9:00 AM,/ }),
+    ).toBeTruthy()
+    expect(pressed()).toEqual([])
+
+    // Once the parent passes a value again, it is shown.
+    rerender(<SlotPicker {...props} service="trim" value={null} />)
+    rerender(<SlotPicker {...props} service="trim" value={value} />)
+    await waitFor(() => expect(pressed()).toHaveLength(1))
+    expect(onChange).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops an uncontrolled selection when the service changes', async () => {
+    const api = createMockApi({ now: () => NOW })
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    const props = {
+      ...base,
+      fetch: api.fetch,
+      timezone: 'America/Denver',
+      onChange,
+    }
+    const { rerender } = render(
+      <SlotPicker {...props} service="cut-and-style" />,
+    )
+    await user.click(
+      await screen.findByRole('button', {
+        name: /^Thursday, December 3, 2026, \d+ times/,
+      }),
+    )
+    await user.click(screen.getByRole('button', { name: /^9:00 AM,/ }))
+    expect(pressed()).toHaveLength(1)
+
+    rerender(<SlotPicker {...props} service="trim" />)
+    await waitFor(() => expect(onChange).toHaveBeenLastCalledWith(null))
+    expect(pressed()).toEqual([])
+    expect(
+      screen.getByText('Pick a highlighted day to see open times.'),
+    ).toBeTruthy()
+  })
+
+  it('applies a later timezone prop and keeps the chosen instant', async () => {
+    const api = createMockApi({ now: () => NOW })
+    const props = { ...base, fetch: api.fetch, service: 'cut-and-style' }
+    // Thursday 31 December, 4:00 PM in Denver.
+    const value = '2026-12-31T23:00:00.000Z'
+    const { rerender } = render(
+      <SlotPicker {...props} value={value} timezone="America/Denver" />,
+    )
+    expect(
+      await screen.findByRole('heading', { name: /Thu, Dec 31/ }),
+    ).toBeTruthy()
+    await waitFor(() =>
+      expect(pressed()).toEqual([expect.stringMatching(/^4:00 PM,/)]),
+    )
+
+    // In Tokyo the same instant is Friday 1 January, 8:00 AM.
+    rerender(<SlotPicker {...props} value={value} timezone="Asia/Tokyo" />)
+    expect(
+      await screen.findByRole('heading', { name: 'January 2027' }),
+    ).toBeTruthy()
+    expect(
+      await screen.findByRole('heading', { name: /Fri, Jan 1/ }),
+    ).toBeTruthy()
+    await waitFor(() =>
+      expect(pressed()).toEqual([
+        expect.stringMatching(/^8:00 AM, Friday, January 1, 2027/),
+      ]),
+    )
+    expect(
+      (screen.getByLabelText('Times shown in') as HTMLSelectElement).value,
+    ).toBe('Asia/Tokyo')
+    const last = api.calls
+      .filter((c) => c.url.pathname === '/api/v1/slots')
+      .at(-1)!
+    expect(last.url.searchParams.get('tz')).toBe('Asia/Tokyo')
+
+    // The customer can still change it.
+    await userEvent
+      .setup()
+      .selectOptions(screen.getByLabelText('Times shown in'), 'America/Denver')
+    expect(
+      await screen.findByRole('heading', { name: /Thu, Dec 31/ }),
+    ).toBeTruthy()
+  })
+
+  it('stops the months at the booking window', async () => {
+    const api = createMockApi({ now: () => NOW })
+    const user = userEvent.setup()
+    // Cut and style books 90 days ahead: 1 March 2027 is the last day.
+    render(
+      <SlotPicker
+        {...base}
+        fetch={api.fetch}
+        service="cut-and-style"
+        timezone="America/Denver"
+      />,
+    )
+    const next = await screen.findByRole('button', { name: 'Next month' })
+    await waitFor(() =>
+      expect((next as HTMLButtonElement).disabled).toBe(false),
+    )
+    for (const month of ['January 2027', 'February 2027', 'March 2027']) {
+      await user.click(next)
+      expect(await screen.findByRole('heading', { name: month })).toBeTruthy()
+    }
+    expect((next as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('falls back to 24 months when the server sends no window', async () => {
+    const api = createMockApi({ now: () => NOW })
+    const noWindow: typeof fetch = async (input, init) => {
+      const response = await api.fetch(input, init)
+      if (!String(input).endsWith('/business')) return response
+      const body = await response.json()
+      for (const s of body.services) delete s.windowDays
+      return new Response(JSON.stringify(body), { status: 200 })
+    }
+    const user = userEvent.setup()
+    render(
+      <SlotPicker
+        {...base}
+        fetch={noWindow}
+        service="cut-and-style"
+        timezone="America/Denver"
+      />,
+    )
+    const next = await screen.findByRole('button', { name: 'Next month' })
+    await screen.findByRole('heading', { name: 'December 2026' })
+    for (let i = 0; i < 3; i++) await user.click(next)
+    expect(
+      await screen.findByRole('heading', { name: 'March 2027' }),
+    ).toBeTruthy()
+    expect((next as HTMLButtonElement).disabled).toBe(false)
+  })
+})
+
+describe('SlotPicker on a daylight-saving fall-back day', () => {
+  // Sunday 1 November 2026: Denver's 1:00 to 2:00 AM happens twice.
+  const FIRST = '2026-11-01T07:30:00.000Z' // 1:30 AM MDT
+  const SECOND = '2026-11-01T08:30:00.000Z' // 1:30 AM MST
+  const LATER = '2026-11-01T16:00:00.000Z' // 9:00 AM MST
+  const service = { ...MOCK_SERVICES[0]!, windowDays: undefined }
+  const fetch: typeof globalThis.fetch = async (input) => {
+    const url = new URL(String(input))
+    const body = url.pathname.endsWith('/business')
+      ? {
+          name: 'Night Owl',
+          slug: 'night-owl',
+          timezone: 'America/Denver',
+          services: [service],
+        }
+      : {
+          timezone: 'America/Denver',
+          days:
+            url.searchParams.get('from')! <= '2026-11-01' &&
+            url.searchParams.get('to')! >= '2026-11-01'
+              ? { '2026-11-01': [FIRST, SECOND, LATER] }
+              : {},
+        }
+    return new Response(JSON.stringify(body), { status: 200 })
+  }
+
+  it('adds the zone to repeated times, on screen and when read out', async () => {
+    vi.setSystemTime(new Date('2026-10-30T12:00:00Z'))
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <SlotPicker
+        host={MOCK_HOST}
+        publishableKey={MOCK_KEY}
+        fetch={fetch}
+        service={service.id}
+        timezone="America/Denver"
+        onChange={onChange}
+      />,
+    )
+    await user.click(
+      await screen.findByRole('button', {
+        name: /^Sunday, November 1, 2026, 3 times available/,
+      }),
+    )
+    const first = screen.getByRole('button', { name: /^1:30 AM MDT, Sunday/ })
+    const second = screen.getByRole('button', { name: /^1:30 AM MST, Sunday/ })
+    expect(first.textContent).toBe('1:30 AM MDT')
+    expect(second.textContent).toBe('1:30 AM MST')
+    // A time that happens once keeps its plain label.
+    expect(
+      screen.getByRole('button', { name: /^9:00 AM, Sunday/ }).textContent,
+    ).toBe('9:00 AM')
+    await user.click(second)
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ start: SECOND }),
+    )
+  })
+})
+
 describe('ServiceList', () => {
   it('lists active services with durations', async () => {
     const api = createMockApi({ now: () => NOW })

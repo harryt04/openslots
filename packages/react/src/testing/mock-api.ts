@@ -41,6 +41,7 @@ export const MOCK_SERVICES: PublicService[] = [
     durationMin: 30,
     askPhone: false,
     askNotes: false,
+    windowDays: 365,
   },
   {
     id: '64b000000000000000000002',
@@ -51,6 +52,8 @@ export const MOCK_SERVICES: PublicService[] = [
     durationMin: 60,
     askPhone: true,
     askNotes: true,
+    // A shorter window, so the gallery shows the month buttons stopping.
+    windowDays: 90,
   },
   {
     id: '64b000000000000000000003',
@@ -61,23 +64,25 @@ export const MOCK_SERVICES: PublicService[] = [
     durationMin: 180,
     askPhone: false,
     askNotes: true,
+    windowDays: 365,
   },
 ]
 
 const RULES: Record<string, ServiceRules> = {
-  trim: rules(30, 0, 30),
-  'cut-and-style': rules(60, 10, 30),
-  'full-color': rules(180, 15, 60),
+  trim: rules('trim', 0, 30),
+  'cut-and-style': rules('cut-and-style', 10, 30),
+  'full-color': rules('full-color', 15, 60),
 }
 
-function rules(durationMin: number, after: number, step: number): ServiceRules {
+function rules(slug: string, after: number, step: number): ServiceRules {
+  const service = MOCK_SERVICES.find((s) => s.slug === slug)!
   return {
-    durationMin,
+    durationMin: service.durationMin,
     bufferBeforeMin: 0,
     bufferAfterMin: after,
     startIntervalMin: step,
     minNoticeMin: 60,
-    windowDays: 365,
+    windowDays: service.windowDays ?? 365,
   }
 }
 

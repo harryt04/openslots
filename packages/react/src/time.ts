@@ -121,6 +121,53 @@ export function formatTime(iso: string, timeZone: string): string {
   }).format(new Date(iso))
 }
 
+/** The zone's short name at an instant ("MDT"), or its UTC offset ("GMT-6"). */
+export function zoneAbbreviation(iso: string, timeZone: string): string {
+  return (
+    formatter(`tzShort:${timeZone}`, { timeZone, timeZoneName: 'short' })
+      .formatToParts(new Date(iso))
+      .find((p) => p.type === 'timeZoneName')?.value ?? timeZone
+  )
+}
+
+/**
+ * True when the wall time of `iso` in `timeZone` happens twice, as 1:30 AM
+ * does on a daylight-saving fall-back day: an instant up to two hours away
+ * shows the same time.
+ */
+export function isAmbiguousTime(iso: string, timeZone: string): boolean {
+  const label = formatTime(iso, timeZone)
+  const at = Date.parse(iso)
+  return [-120, -60, -30, 30, 60, 120].some(
+    (min) =>
+      formatTime(new Date(at + min * 60_000).toISOString(), timeZone) === label,
+  )
+}
+
+/** "2:30 PM", or "1:30 AM MST" when that wall time happens twice. */
+export function formatTimeClear(iso: string, timeZone: string): string {
+  const time = formatTime(iso, timeZone)
+  return isAmbiguousTime(iso, timeZone)
+    ? `${time} ${zoneAbbreviation(iso, timeZone)}`
+    : time
+}
+
+/**
+ * Labels for a day's offered times. A time whose label another offered
+ * time shares, or whose wall time happens twice, gets its zone abbreviation
+ * so the two can be told apart, on screen and when read out.
+ */
+export function slotLabels(starts: readonly string[], timeZone: string) {
+  const plain = starts.map((s) => formatTime(s, timeZone))
+  const seen = new Map<string, number>()
+  for (const label of plain) seen.set(label, (seen.get(label) ?? 0) + 1)
+  return starts.map((s, i) =>
+    seen.get(plain[i]!)! > 1 || isAmbiguousTime(s, timeZone)
+      ? `${plain[i]} ${zoneAbbreviation(s, timeZone)}`
+      : plain[i]!,
+  )
+}
+
 /** "2:30 – 3:30 PM" style range, using the locale's range format. */
 export function formatTimeRange(
   startIso: string,

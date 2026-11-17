@@ -1,0 +1,13 @@
+{
+  "name": "@openslots/react-18-test",
+  "version": "0.0.0",
+  "private": true,
+  "description": "React 18 copies for running @openslots/react's tests against React 18 (vitest.react18.config.ts). Never published.",
+  "license": "MIT",
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

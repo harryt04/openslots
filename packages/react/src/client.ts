@@ -97,9 +97,43 @@ function validate<T>(schema: Schema<T>, value: unknown): T {
   return parsed.data
 }
 
-/** Creates a client. It holds no state and makes no request until called. */
+/**
+ * The instance's base URL without a trailing slash. `host` is an absolute
+ * `http:` or `https:` URL, optionally with a path prefix
+ * (`https://example.com/slots`), or a same-origin path (`''`, `/slots`).
+ * A query string, fragment, credentials or another protocol would produce
+ * wrong endpoint URLs, so they are refused.
+ */
+export function normalizeHost(host: string): string {
+  const raw = host.trim()
+  const fail = (why: string): never => {
+    throw new TypeError(
+      `OpenSlots: \`host\` ${why}. Use the instance's URL, for example https://slots.example.com (got ${JSON.stringify(host)}).`,
+    )
+  }
+  if (raw.includes('?')) fail('must not include a query string')
+  if (raw.includes('#')) fail('must not include a fragment')
+  // A same-origin path: nothing to parse.
+  if (raw === '' || (raw.startsWith('/') && !raw.startsWith('//'))) {
+    return raw.replace(/\/+$/, '')
+  }
+  if (!/^https?:\/\//i.test(raw)) fail('must be an http or https URL')
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return fail('is not a valid URL')
+  }
+  if (url.username || url.password) fail('must not include credentials')
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`
+}
+
+/**
+ * Creates a client. It holds no state and makes no request until called.
+ * Throws a `TypeError` straight away for an unusable `host`.
+ */
 export function createClient(options: ClientOptions): OpenSlotsClient {
-  const host = options.host.replace(/\/+$/, '')
+  const host = normalizeHost(options.host)
   const base = `${host}/api/v1`
 
   async function request<T>(

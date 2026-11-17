@@ -4,11 +4,13 @@ import {
   API_ERROR_STATUS,
   apiErrorSchema,
   createBookingBodySchema,
+  publicServiceSchema,
   slotsQuerySchema,
   slotsResponseSchema,
 } from './api'
 import {
   BLOCK_MINUTES,
+  customerFieldsFor,
   customerFieldsSchema,
   DURATION_PRESETS,
   localDateSchema,
@@ -261,6 +263,51 @@ describe('review regressions', () => {
           .success,
       ).toBe(false)
     }
+  })
+
+  it('accepts a public service with or without windowDays', () => {
+    const svc = {
+      id: '64b000000000000000000001',
+      name: 'Trim',
+      slug: 'trim',
+      description: '',
+      color: 'blue',
+      durationMin: 30,
+      askPhone: false,
+      askNotes: false,
+    }
+    expect(ok(publicServiceSchema, svc)).toBe(true)
+    expect(ok(publicServiceSchema, { ...svc, windowDays: 60 })).toBe(true)
+    expect(ok(publicServiceSchema, { ...svc, windowDays: 0 })).toBe(false)
+    expect(ok(publicServiceSchema, { ...svc, windowDays: 1.5 })).toBe(false)
+  })
+
+  it('requires the phone only when the service asks for it', () => {
+    const c = { name: 'A', email: 'a@example.com' }
+    const asked = customerFieldsFor({ askPhone: true, askNotes: false })
+    expect(asked.safeParse(c).success).toBe(false)
+    expect(asked.safeParse({ ...c, phone: '   ' }).success).toBe(false)
+    expect(asked.safeParse({ ...c, phone: 'x'.repeat(41) }).success).toBe(false)
+    expect(asked.parse({ ...c, phone: ' 555 0100 ', notes: 'hi' })).toEqual({
+      ...c,
+      phone: '555 0100',
+    })
+
+    const notAsked = customerFieldsFor({ askPhone: false, askNotes: false })
+    expect(notAsked.parse({ ...c, phone: '555', notes: 'hi' })).toEqual(c)
+  })
+
+  it('keeps notes optional, and strips them when not asked for', () => {
+    const c = { name: 'A', email: 'a@example.com' }
+    const asked = customerFieldsFor({ askPhone: false, askNotes: true })
+    expect(asked.parse(c)).toEqual(c)
+    expect(asked.parse({ ...c, notes: '  ' })).toEqual(c)
+    expect(asked.parse({ ...c, notes: ' Fringe ' }).notes).toBe('Fringe')
+    expect(asked.safeParse({ ...c, notes: 'x'.repeat(1001) }).success).toBe(
+      false,
+    )
+    // The base checks still apply.
+    expect(asked.safeParse({ ...c, email: 'nope' }).success).toBe(false)
   })
 
   it('treats blank optional customer fields as not given', () => {

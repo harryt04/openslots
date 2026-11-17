@@ -107,14 +107,17 @@
   );
   --color-primary-soft: var(
     --primary-soft,
-    var(--openslots-default-primary-soft)
+    var(--openslots-derived-primary-soft, var(--openslots-default-primary-soft))
   );
   --color-accent: var(--accent, var(--openslots-default-accent));
   --color-accent-foreground: var(
     --accent-foreground,
     var(--openslots-default-accent-foreground)
   );
-  --color-accent-soft: var(--accent-soft, var(--openslots-default-accent-soft));
+  --color-accent-soft: var(
+    --accent-soft,
+    var(--openslots-derived-accent-soft, var(--openslots-default-accent-soft))
+  );
   --color-highlight: var(--highlight, var(--openslots-default-highlight));
   --color-highlight-foreground: var(
     --highlight-foreground,
@@ -213,6 +216,26 @@
   }
 }
 
+/*
+ * Soft surfaces derived from a host's base color (docs/TRD.md section 8).
+ * `var(--primary)` has no fallback on purpose: when the host does not set
+ * `--primary`, this property is invalid at computed-value time, so the
+ * `var(--openslots-derived-primary-soft, …)` above falls through to the
+ * Voltage default. Foregrounds are never derived; they must be set in pairs.
+ */
+.openslots {
+  --openslots-derived-primary-soft: color-mix(
+    in oklab,
+    var(--primary) 16%,
+    var(--card, var(--openslots-default-card))
+  );
+  --openslots-derived-accent-soft: color-mix(
+    in oklab,
+    var(--accent) 18%,
+    var(--card, var(--openslots-default-card))
+  );
+}
+
 /* --------------------------------------------------------------- root */
 
 .openslots {
@@ -222,7 +245,7 @@
   min-width: 0;
   margin: 0;
   padding: 0;
-  color: var(--color-foreground);
+  color: var(--foreground, var(--openslots-default-foreground));
   font-family: var(--os-font-sans);
   font-size: 14px;
   font-weight: 400;
@@ -252,7 +275,7 @@
   margin: 0;
   padding: 0;
   border: 0 solid;
-  border-color: var(--color-border);
+  border-color: var(--border, var(--openslots-default-border));
   font: inherit;
   color: inherit;
   letter-spacing: inherit;
@@ -328,7 +351,7 @@
 }
 
 .openslots :where(input, textarea)::placeholder {
-  color: var(--color-muted-foreground);
+  color: var(--muted-foreground, var(--openslots-default-muted-foreground));
   opacity: 0.6;
 }
 
@@ -339,6 +362,17 @@
 /* T-6: one visible 2px focus ring in --ring on every interactive element. */
 .openslots
   :where(button, a, input, select, textarea, [tabindex]):focus-visible {
-  outline: 2px solid var(--color-ring);
+  outline: 2px solid var(--ring, var(--openslots-default-ring));
   outline-offset: 2px;
+}
+
+/* Reduced motion: no spinning and no transitions. */
+@media (prefers-reduced-motion: reduce) {
+  .openslots *,
+  .openslots ::before,
+  .openslots ::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
 }

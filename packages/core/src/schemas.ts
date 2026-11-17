@@ -231,6 +231,31 @@ export const customerFieldsSchema = z.object({
 })
 export type CustomerFields = z.infer<typeof customerFieldsSchema>
 
+/** Which optional customer fields a service asks for. */
+export interface CustomerFieldOptions {
+  askPhone: boolean
+  askNotes: boolean
+}
+
+/**
+ * The customer fields for one service (docs/TRD.md section 7): the phone is
+ * required when `askPhone` is true, notes are always optional, and a field
+ * the service does not ask for is stripped. The booking form and
+ * `POST /bookings` both validate with this, so they cannot disagree.
+ */
+export function customerFieldsFor({
+  askPhone,
+  askNotes,
+}: CustomerFieldOptions): z.ZodType<CustomerFields, unknown> {
+  const base = customerFieldsSchema.omit({ phone: true, notes: true })
+  return base.extend({
+    ...(askPhone
+      ? { phone: z.string().trim().min(1).max(LIMITS.customerPhone) }
+      : {}),
+    ...(askNotes ? { notes: optionalText(LIMITS.customerNotes) } : {}),
+  }) as z.ZodType<CustomerFields, unknown>
+}
+
 /** Customer as stored on a booking: the form fields plus their timezone. */
 export const customerSchema = customerFieldsSchema.extend({
   timezone: timeZoneSchema,

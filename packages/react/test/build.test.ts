@@ -65,8 +65,91 @@ function leaks(css: string): string[] {
   return problems
 }
 
+interface VarUse {
+  name: string
+  hasFallback: boolean
+}
+
+/** Every `var(--name[, fallback])` in a value, nested ones included. */
+function varUses(value: string): VarUse[] {
+  const uses: VarUse[] = []
+  const re = /var\(\s*(--[\w-]+)\s*(,?)/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(value))) {
+    uses.push({ name: m[1]!, hasFallback: m[2] === ',' })
+  }
+  return uses
+}
+
+/**
+ * Custom properties used without a fallback that the stylesheet never
+ * defines. Those would compute to nothing in a plain host page, as
+ * `--color-ring` once did for the focus ring. The derived soft surfaces are
+ * deliberately conditional on a host token (see src/styles.css); they are
+ * allowed only because every use of them has a fallback.
+ */
+function undefinedVars(css: string): string[] {
+  const root = postcss.parse(css)
+  const defined = new Set<string>()
+  root.walkDecls((decl) => {
+    if (decl.prop.startsWith('--')) defined.add(decl.prop)
+  })
+  const problems = new Set<string>()
+  root.walkDecls((decl) => {
+    const conditional = decl.prop.startsWith('--openslots-derived-')
+    for (const use of varUses(decl.value)) {
+      if (use.name.startsWith('--openslots-derived-') && !use.hasFallback) {
+        problems.add(`${use.name} used without a fallback in ${decl.prop}`)
+      }
+      if (use.hasFallback || defined.has(use.name) || conditional) continue
+      problems.add(`${use.name} (in ${decl.prop})`)
+    }
+  })
+  return [...problems]
+}
+
 describe('dist/styles.css', () => {
   const css = read('styles.css')
+
+  it('uses only custom properties it defines or gives a fallback (T-6)', () => {
+    expect(undefinedVars(css)).toEqual([])
+    // The checker notices the mistake it guards against.
+    expect(
+      undefinedVars(
+        '.openslots :focus-visible{outline:2px solid var(--color-ring)}',
+      ),
+    ).toEqual(['--color-ring (in outline)'])
+    expect(
+      undefinedVars('.openslots{--a:1;color:var(--b, red);top:var(--a)}'),
+    ).toEqual([])
+  })
+
+  it('draws the focus ring from the public token with a Voltage fallback', () => {
+    expect(css).toMatch(
+      /:focus-visible\s*\{\s*outline:\s*2px solid var\(--ring, var\(--openslots-default-ring\)\)/,
+    )
+  })
+
+  it('derives the soft surfaces only from a host base color', () => {
+    const flat = css
+      .replace(/\s+/g, ' ')
+      .replace(/\( /g, '(')
+      .replace(/ \)/g, ')')
+    expect(flat).toContain(
+      'var(--primary-soft, var(--openslots-derived-primary-soft, var(--openslots-default-primary-soft)))',
+    )
+    expect(css).toMatch(
+      /--openslots-derived-primary-soft:\s*color-mix\(\s*in oklab,\s*var\(--primary\) 16%/,
+    )
+    // No Tailwind fallback that would paint the full base color.
+    expect(css).not.toMatch(/--openslots-derived-[\w-]+:\s*var\(/)
+  })
+
+  it('stops motion under prefers-reduced-motion', () => {
+    expect(css).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.openslots \*[^{]*\{\s*animation: none !important;\s*transition: none !important;/,
+    )
+  })
 
   it('scopes every rule under .openslots and leaks no global at-rule (C-4)', () => {
     expect(leaks(css)).toEqual([])

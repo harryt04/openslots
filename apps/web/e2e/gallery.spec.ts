@@ -14,15 +14,27 @@ async function open(page: Page, scheme: 'light' | 'dark' = 'light') {
   await expect(flow(page).getByText('Choose a service')).toBeVisible()
 }
 
+/*
+ * The day grid sets `data-state="ready"` once this month's slots have
+ * arrived and no automatic month advance is pending, and `data-month` to
+ * the month shown. Waiting for those, rather than for loading text to go,
+ * cannot pass before the first request has even started.
+ */
+async function readyGrid(scope: Locator): Promise<Locator> {
+  const grid = scope.locator('[role=grid]')
+  await expect(grid).toHaveAttribute('data-state', 'ready')
+  return grid
+}
+
 async function firstOpenDay(scope: Locator): Promise<Locator> {
-  const open = scope.locator(
-    '[role=grid] button[data-date]:not([aria-disabled])',
-  )
   // Step forward a month at a time until something is open.
   for (let i = 0; i < 3; i++) {
-    await expect(scope.getByText('Loading open times…')).toHaveCount(0)
+    const grid = await readyGrid(scope)
+    const open = grid.locator('button[data-date]:not([aria-disabled])')
     if (await open.count()) return open.first()
+    const month = (await grid.getAttribute('data-month')) ?? ''
     await scope.getByRole('button', { name: 'Next month' }).click()
+    await expect(grid).not.toHaveAttribute('data-month', month)
   }
   throw new Error('no open day in three months')
 }
@@ -37,6 +49,10 @@ test('books by mouse, from service to confirmation', async ({ page }) => {
   await f.getByRole('button', { name: 'Continue' }).click()
   await f.getByLabel('Name').fill('Alex Morgan')
   await f.getByLabel('Email').fill('alex@example.com')
+  // Cut and style asks for a phone, so it is required (S8).
+  await f.getByRole('button', { name: 'Confirm booking' }).click()
+  await expect(f.getByText('Please enter a phone number.')).toBeVisible()
+  await f.getByLabel('Phone').fill('303 555 0100')
   await f.getByRole('button', { name: 'Confirm booking' }).click()
   await expect(f.getByRole('heading', { name: "You're booked" })).toBeVisible()
   await expect(
@@ -74,13 +90,13 @@ test('books with the keyboard alone', async ({ page }) => {
   await tabUntil((a) => a.text.startsWith('Trim'))
   await page.keyboard.press('Enter')
   await expect(f.getByText('Step 2 of 4')).toBeVisible()
-  await expect(f.getByText('Loading open times…')).toHaveCount(0)
+  await readyGrid(f)
 
   await tabUntil((a) => a.date !== '')
   // Walk the grid to an open day, a month ahead if need be.
   for (let i = 0; i < 70 && (await active()).disabled; i++) {
     await page.keyboard.press('ArrowRight')
-    await expect(f.getByText('Loading open times…')).toHaveCount(0)
+    await readyGrid(f)
   }
   expect((await active()).disabled).toBe(false)
   await page.keyboard.press('Enter')
@@ -192,4 +208,79 @@ test('nothing leaks into or out of a hostile host page (C-4)', async ({
       .locator('#host-title')
       .evaluate((el) => getComputedStyle(el).fontFamily),
   ).toMatch(/Georgia/)
+})
+
+test('shows a 2px solid focus ring in a plain host page (T-6)', async ({
+  page,
+}) => {
+  await open(page)
+  const host = page.frameLocator('iframe[title="Pretend host page"]')
+  const body = host.locator('body')
+  const focused = () =>
+    body.evaluate(() => {
+      const el = document.activeElement as HTMLElement
+      const s = getComputedStyle(el)
+      return {
+        tag: el.tagName,
+        text: el.textContent?.trim() ?? '',
+        date: el.dataset.date ?? '',
+        disabled: el.getAttribute('aria-disabled') === 'true',
+        pressed: el.getAttribute('aria-pressed'),
+        name: el.getAttribute('name') ?? '',
+        visible: el.matches(':focus-visible'),
+        ring: `${s.outlineWidth} ${s.outlineStyle}`,
+        color: s.outlineColor,
+      }
+    })
+  type Focused = Awaited<ReturnType<typeof focused>>
+  async function tabUntil(match: (f: Focused) => boolean): Promise<Focused> {
+    for (let i = 0; i < 25; i++) {
+      await page.keyboard.press('Tab')
+      const f = await focused()
+      if (match(f)) return f
+    }
+    throw new Error('focus never reached the target')
+  }
+  const ring = { visible: true, ring: '2px solid', color: 'rgb(91, 52, 245)' }
+
+  // Into the frame by keyboard, so focus is keyboard focus.
+  const trim = host.getByRole('button', { name: /Trim/ })
+  await expect(trim).toBeVisible()
+  await trim.focus()
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Shift+Tab')
+  expect(await focused()).toMatchObject({
+    text: expect.stringMatching(/^Trim/),
+    ...ring,
+  })
+
+  await page.keyboard.press('Enter')
+  await readyGrid(body)
+  // A button: the month navigation.
+  expect(
+    await tabUntil((f) => f.tag === 'BUTTON' && f.date === '' && !f.disabled),
+  ).toMatchObject(ring)
+  // A day.
+  const day = await tabUntil((f) => f.date !== '')
+  expect(day).toMatchObject(ring)
+  let current = day
+  for (let i = 0; i < 70 && current.disabled; i++) {
+    await page.keyboard.press('ArrowRight')
+    await readyGrid(body)
+    current = await focused()
+  }
+  expect(current).toMatchObject({ disabled: false, ...ring })
+  await page.keyboard.press('Enter')
+  // A time.
+  expect(await tabUntil((f) => f.pressed === 'false')).toMatchObject(ring)
+  await page.keyboard.press('Enter')
+  expect(await tabUntil((f) => f.text.startsWith('Continue'))).toMatchObject(
+    ring,
+  )
+  await page.keyboard.press('Enter')
+  // An input.
+  expect(await tabUntil((f) => f.name === 'name')).toMatchObject({
+    tag: 'INPUT',
+    ...ring,
+  })
 })

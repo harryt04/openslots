@@ -28,7 +28,8 @@
     "dev": "node scripts/build-css.mjs --watch",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm run build && vitest run"
+    "test": "pnpm run build && vitest run && vitest run --config vitest.react18.config.ts",
+    "test:react18": "vitest run --config vitest.react18.config.ts"
   },
   "peerDependencies": {
     "react": "^18 || ^19",

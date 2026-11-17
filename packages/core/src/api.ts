@@ -9,6 +9,7 @@ import {
   bookingStatusSchema,
   customerFieldsSchema,
   localDateSchema,
+  MAX_WINDOW_DAYS,
   objectIdSchema,
   serviceColorSchema,
   slugSchema,
@@ -78,6 +79,12 @@ export const publicServiceSchema = z.object({
   durationMin: z.number().int().positive(),
   askPhone: z.boolean(),
   askNotes: z.boolean(),
+  /**
+   * The booking window: how many days after today (in the business
+   * timezone) can be booked. Optional so a server that does not send it
+   * still matches; clients then assume a long window.
+   */
+  windowDays: z.number().int().min(1).max(MAX_WINDOW_DAYS).optional(),
 })
 export type PublicService = z.infer<typeof publicServiceSchema>
 

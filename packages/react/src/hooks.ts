@@ -157,7 +157,7 @@ const clientIds = new WeakMap<OpenSlotsClient, number>()
 let nextClientId = 1
 
 /** Identifies what a connection talks to, for request keys. */
-function connectionKey(connection: Connection): string {
+export function connectionKey(connection: Connection): string {
   if (connection.client) {
     let id = clientIds.get(connection.client)
     if (id === undefined) {

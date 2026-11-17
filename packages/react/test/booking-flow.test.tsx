@@ -1,8 +1,16 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { BookingFlow } from '../src'
+import { safeManageUrl } from '../src/components/booking-flow'
 import {
   createMockApi,
   MOCK_HOST,
@@ -128,6 +136,7 @@ describe('BookingFlow', () => {
     await user.click(screen.getByRole('button', { name: 'Continue' }))
     await user.type(screen.getByLabelText('Name'), 'Alex Morgan')
     await user.type(screen.getByLabelText('Email'), 'alex@example.com')
+    await user.type(screen.getByLabelText('Phone'), '303 555 0100')
 
     api.setScenario('slot_taken')
     const before = slotCalls(api)
@@ -239,4 +248,214 @@ describe('BookingFlow', () => {
     await user.click(screen.getByRole('button', { name: 'Back' }))
     expect(await screen.findByText('Choose a service')).toBeTruthy()
   })
+
+  it('requires the phone when the service asks for it; notes stay optional', async () => {
+    const { api, user } = setup({ service: 'cut-and-style' })
+    await pickDecember3At(user, '9:00 AM')
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    // S8: Phone has no "optional" marker, Notes does.
+    const phone = screen.getByLabelText('Phone')
+    expect(phone.hasAttribute('required')).toBe(true)
+    expect(screen.getByText('Notes').textContent).toMatch(/optional/)
+    expect(screen.getByText('Phone').textContent).not.toMatch(/optional/)
+
+    await user.type(screen.getByLabelText('Name'), 'Alex Morgan')
+    await user.type(screen.getByLabelText('Email'), 'alex@example.com')
+    await user.type(phone, '   ')
+    await user.click(screen.getByRole('button', { name: 'Confirm booking' }))
+    expect(await screen.findByText('Please enter a phone number.')).toBeTruthy()
+    expect(phone.getAttribute('aria-invalid')).toBe('true')
+    expect(api.calls.some((c) => c.method === 'POST')).toBe(false)
+
+    await user.type(phone, '303 555 0100')
+    await user.click(screen.getByRole('button', { name: 'Confirm booking' }))
+    expect(
+      await screen.findByRole('heading', { name: "You're booked" }),
+    ).toBeTruthy()
+    const post = api.calls.find((c) => c.method === 'POST')!
+    expect((post.body as { customer: unknown }).customer).toEqual({
+      name: 'Alex Morgan',
+      email: 'alex@example.com',
+      phone: '303 555 0100',
+    })
+  })
+
+  it('sends one request for a rapid double submit', async () => {
+    const api = createMockApi({ now: () => NOW })
+    const gate = gated(api)
+    const { user } = setup({ service: 'trim', fetch: gate.fetch }, api)
+    await pickDecember3At(user, '9:00 AM')
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.type(screen.getByLabelText('Name'), 'Alex Morgan')
+    await user.type(screen.getByLabelText('Email'), 'alex@example.com')
+
+    const form = screen
+      .getByRole('button', { name: 'Confirm booking' })
+      .closest('form')!
+    // Two submits in the same tick, before React re-renders.
+    act(() => {
+      fireEvent.submit(form)
+      fireEvent.submit(form)
+    })
+    await act(async () => gate.release())
+    expect(
+      await screen.findByRole('heading', { name: "You're booked" }),
+    ).toBeTruthy()
+    expect(api.calls.filter((c) => c.method === 'POST')).toHaveLength(1)
+  })
+
+  it('locks the journey while booking and confirms what was submitted', async () => {
+    const api = createMockApi({ now: () => NOW })
+    const gate = gated(api)
+    const { user, onBooked } = setup({ fetch: gate.fetch }, api)
+    await user.click(await screen.findByRole('button', { name: /Trim/ }))
+    await pickDecember3At(user, '9:00 AM')
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.type(screen.getByLabelText('Name'), 'Alex Morgan')
+    await user.type(screen.getByLabelText('Email'), 'alex@example.com')
+    await user.click(screen.getByRole('button', { name: 'Confirm booking' }))
+
+    // In flight: Back is disabled and does nothing.
+    const back = screen.getByRole('button', { name: 'Back' })
+    expect((back as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(back)
+    expect(screen.getByText('Step 3 of 4')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Booking/ })).toBeTruthy()
+
+    await act(async () => gate.release())
+    expect(
+      await screen.findByRole('heading', { name: "You're booked" }),
+    ).toBeTruthy()
+    expect(screen.getByText('Trim with Shear Bliss Salon')).toBeTruthy()
+    expect(onBooked).toHaveBeenCalledTimes(1)
+  })
+
+  it('confirms the submitted service even if the host changes it meanwhile', async () => {
+    const api = createMockApi({ now: () => NOW })
+    const gate = gated(api)
+    const onBooked = vi.fn()
+    const user = userEvent.setup()
+    const props = {
+      host: MOCK_HOST,
+      publishableKey: MOCK_KEY,
+      fetch: gate.fetch,
+      timezone: 'America/Denver',
+      onBooked,
+    }
+    const { rerender } = render(<BookingFlow {...props} service="trim" />)
+    await pickDecember3At(user, '9:00 AM')
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.type(screen.getByLabelText('Name'), 'Alex Morgan')
+    await user.type(screen.getByLabelText('Email'), 'alex@example.com')
+    await user.click(screen.getByRole('button', { name: 'Confirm booking' }))
+
+    rerender(<BookingFlow {...props} service="full-color" />)
+    expect(await screen.findByText('Step 2 of 4')).toBeTruthy()
+
+    await act(async () => gate.release())
+    expect(
+      await screen.findByRole('heading', { name: "You're booked" }),
+    ).toBeTruthy()
+    expect(screen.getByText('Trim with Shear Bliss Salon')).toBeTruthy()
+    expect(screen.getByText(/9:00\s*–\s*9:30\s*AM/)).toBeTruthy()
+    expect(onBooked).toHaveBeenCalledWith(
+      expect.objectContaining({
+        service: expect.objectContaining({ slug: 'trim' }),
+      }),
+    )
+  })
+
+  it('clears the chosen time when the service prop changes', async () => {
+    const api = createMockApi({ now: () => NOW })
+    const user = userEvent.setup()
+    const props = {
+      host: MOCK_HOST,
+      publishableKey: MOCK_KEY,
+      fetch: api.fetch,
+      timezone: 'America/Denver',
+    }
+    const { rerender } = render(<BookingFlow {...props} service="trim" />)
+    await pickDecember3At(user, '9:30 AM')
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(await screen.findByText('Step 3 of 4')).toBeTruthy()
+
+    rerender(<BookingFlow {...props} service="full-color" />)
+    expect(await screen.findByText('Step 2 of 4')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Full color' })).toBeTruthy()
+    // No time from Trim's availability survives, and nothing to continue.
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+    expect(screen.queryByRole('button', { pressed: true })).toBeNull()
+    expect(screen.queryByText(/9:30 AM/)).toBeNull()
+
+    // Same service by id instead of slug: nothing is reset.
+    await pickDecember3At(user, '9:00 AM')
+    rerender(<BookingFlow {...props} service="64b000000000000000000003" />)
+    expect(
+      screen
+        .getByRole('button', { name: /^9:00 AM,/ })
+        .getAttribute('aria-pressed'),
+    ).toBe('true')
+  })
+
+  it('shows no link for a manage URL that is not http(s)', async () => {
+    const api = createMockApi({ now: () => NOW })
+    const evil: typeof fetch = async (input, init) => {
+      const response = await api.fetch(input, init)
+      if (init?.method !== 'POST') return response
+      const body = await response.json()
+      return new Response(
+        JSON.stringify({ ...body, manageUrl: 'javascript:alert(1)' }),
+        { status: response.status, headers: response.headers },
+      )
+    }
+    const { user } = setup({ service: 'trim', fetch: evil }, api)
+    await pickDecember3At(user, '9:00 AM')
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.type(screen.getByLabelText('Name'), 'Alex Morgan')
+    await user.type(screen.getByLabelText('Email'), 'alex@example.com')
+    await user.click(screen.getByRole('button', { name: 'Confirm booking' }))
+
+    expect(
+      await screen.findByRole('heading', { name: "You're booked" }),
+    ).toBeTruthy()
+    expect(screen.queryByRole('link')).toBeNull()
+    expect(document.querySelector('a[href^="javascript"]')).toBeNull()
+    expect(
+      screen.getByText(/link to reschedule or cancel isn't available/),
+    ).toBeTruthy()
+  })
 })
+
+describe('safeManageUrl', () => {
+  it('keeps http and https URLs only', () => {
+    expect(safeManageUrl('https://slots.example.com/m/abc')).toBe(
+      'https://slots.example.com/m/abc',
+    )
+    expect(safeManageUrl('http://localhost:3000/m/abc')).toBe(
+      'http://localhost:3000/m/abc',
+    )
+    for (const bad of [
+      'javascript:alert(1)',
+      ' JavaScript:alert(1)',
+      'data:text/html,<script>alert(1)</script>',
+      'vbscript:x',
+      '/m/abc',
+      'not a url',
+    ]) {
+      expect(safeManageUrl(bad), bad).toBeNull()
+    }
+  })
+})
+
+/** Holds `POST` requests until `release` is called. */
+function gated(api: MockApi) {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    if (init?.method === 'POST') await gate
+    return api.fetch(input, init)
+  }
+  return { fetch, release }
+}

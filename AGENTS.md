@@ -48,7 +48,7 @@ Run from the repository root. Node 26 (`.nvmrc`) and pnpm 11 (pinned in `package
 | `pnpm run create-indexes` | Create MongoDB indexes for the database selected by `NODE_ENV`. Reads `apps/web/.env.local` if present. |
 | `pnpm run prettify` / `pnpm run format:check` | Prettier, write or check. CI checks. |
 
-Run one package with `pnpm --filter @openslots/core test` (or `@openslots/react`, `@openslots/web`). `@openslots/react` also has `build:css` (compile `dist/styles.css` once) and `dev` (rebuild it on change); its `test` builds the package first, because some tests check `dist`.
+Run one package with `pnpm --filter @openslots/core test` (or `@openslots/react`, `@openslots/web`). `@openslots/react` also has `build:css` (compile `dist/styles.css` once) and `dev` (rebuild it on change); its `test` builds the package first, because some tests check `dist`, and then runs the suite twice: on React 19 and on React 18 (`test:react18`, with the React 18 copies held by the private workspace package `packages/react/test/react-18`).
 
 ## Things that are easy to get wrong
 

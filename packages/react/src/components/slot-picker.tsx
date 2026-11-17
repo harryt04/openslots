@@ -12,7 +12,7 @@ import {
 } from 'react'
 
 import { customerMessage } from '../errors'
-import { useBusiness, useSlots, type Connection } from '../hooks'
+import { connectionKey, useBusiness, useSlots, type Connection } from '../hooks'
 import {
   addDays,
   addMonths,
@@ -23,11 +23,11 @@ import {
   formatDateLong,
   formatDateShort,
   formatMonth,
-  formatTime,
   lastOfMonth,
   listTimeZones,
   localDateOf,
   monthOf,
+  slotLabels,
   timeZoneLabel,
   todayIn,
   weekday,
@@ -52,17 +52,29 @@ export interface SelectedSlot {
 
 /** How many empty months to skip forward on first load before stopping. */
 const AUTO_ADVANCE_MONTHS = 2
-/** How far ahead the month buttons go. */
+/** How far ahead the month buttons go when the service has no window. */
 const MAX_MONTHS_AHEAD = 24
 
-/** The customer's timezone: the prop if given, else detected after mount. */
-export function useCustomerTimeZone(initial?: string) {
-  const [timezone, setTimezone] = useState<string | null>(initial ?? null)
+/**
+ * The customer's timezone: the prop if given, else detected after mount.
+ * The customer can change it; a later change of the prop replaces it.
+ */
+export function useCustomerTimeZone(prop?: string) {
+  const [timezone, setTimezone] = useState<string | null>(prop ?? null)
+  const [lastProp, setLastProp] = useState(prop)
+  if (prop !== lastProp) {
+    setLastProp(prop)
+    if (prop) setTimezone(prop)
+  }
   useEffect(() => {
     // Detected on the client only, so server rendering stays deterministic.
-    if (!initial) setTimezone((tz) => tz ?? detectTimeZone())
-  }, [initial])
+    if (!prop) setTimezone((tz) => tz ?? detectTimeZone())
+  }, [prop])
   return [timezone, setTimezone] as const
+}
+
+function maxOf(a: string, b: string): string {
+  return a > b ? a : b
 }
 
 export function endOf(start: string, durationMin: number | undefined) {
@@ -137,6 +149,13 @@ export interface SlotPanelsProps {
   onChange: (slot: SelectedSlot | null) => void
   /** The customer's timezone. */
   timezone: string
+  /** The business timezone, where the booking window is counted. */
+  businessTimezone?: string
+  /**
+   * The service's booking window in days after today (business timezone).
+   * The month buttons stop at the month it ends in; without it, 24 months.
+   */
+  windowDays?: number
   /** The day to show first when no slot is chosen. */
   initialDate?: string | null
   /** Called when the customer picks a day. */
@@ -170,6 +189,8 @@ export function SlotPanels({
   value,
   onChange,
   timezone,
+  businessTimezone,
+  windowDays,
   initialDate,
   onDateChange,
   reloadToken = 0,
@@ -183,12 +204,13 @@ export function SlotPanels({
   const monthLabelId = `${ids}-month`
   const timesHeadingId = `${ids}-times`
 
-  // Today, read once per timezone after mount (no clock reads while
-  // server rendering).
-  const [today, setToday] = useState<string | null>(null)
+  // The clock, read once after mount (no clock reads while server
+  // rendering); today follows the timezone.
+  const [now, setNow] = useState<Date | null>(null)
   useEffect(() => {
-    setToday(todayIn(timezone))
-  }, [timezone])
+    setNow(new Date())
+  }, [])
+  const today = now ? todayIn(timezone, now) : null
 
   const valueDate = value ? localDateOf(new Date(value), timezone) : null
   const [month, setMonth] = useState<string | null>(null)
@@ -238,18 +260,41 @@ export function SlotPanels({
   const loaded = slots.data !== undefined && !slots.loading
   const emptyMonth = loaded && !unavailable && Object.keys(days).length === 0
 
+  const minMonth = today ? monthOf(today) : null
+  const maxMonth = !minMonth
+    ? null
+    : windowDays !== undefined && now
+      ? maxOf(
+          minMonth,
+          monthOf(
+            addDays(todayIn(businessTimezone ?? timezone, now), windowDays),
+          ),
+        )
+      : addMonths(minMonth, MAX_MONTHS_AHEAD)
+  const canPrev = !!month && !!minMonth && month > minMonth
+  const canNext = !!month && !!maxMonth && month < maxMonth
+
   // On first load, step past empty months (up to two) to the first openings.
+  const advancing =
+    emptyMonth && autoAdvance.current > 0 && !startDate && canNext
   useEffect(() => {
-    if (emptyMonth && autoAdvance.current > 0 && !startDate && month) {
+    if (advancing && month) {
       autoAdvance.current -= 1
       setMonth(addMonths(month, 1))
     } else if (loaded) {
       autoAdvance.current = 0
     }
-  }, [emptyMonth, loaded, month, startDate])
+  }, [advancing, loaded, month])
 
-  const minMonth = today ? monthOf(today) : null
-  const maxMonth = minMonth ? addMonths(minMonth, MAX_MONTHS_AHEAD) : null
+  // For tests and hosts: whether the grid shows this month's final answer.
+  const gridState =
+    slots.error && !slots.loading
+      ? 'error'
+      : !loaded || advancing
+        ? 'loading'
+        : unavailable
+          ? 'unavailable'
+          : 'ready'
 
   const cells: Cell[] = useMemo(() => {
     if (!month) return []
@@ -346,9 +391,11 @@ export function SlotPanels({
     )
   }, [month, cells])
 
-  const times = selectedDate && !unavailable ? (days[selectedDate] ?? []) : []
-  const canPrev = !!month && !!minMonth && month > minMonth
-  const canNext = !!month && !!maxMonth && month < maxMonth
+  const times = useMemo(
+    () => (selectedDate && !unavailable ? (days[selectedDate] ?? []) : []),
+    [selectedDate, unavailable, days],
+  )
+  const labels = useMemo(() => slotLabels(times, timezone), [times, timezone])
 
   const calendar = (
     <div className={calendarClassName}>
@@ -384,6 +431,8 @@ export function SlotPanels({
           role="grid"
           aria-labelledby={monthLabelId}
           aria-busy={slots.loading || undefined}
+          data-month={month}
+          data-state={gridState}
           onKeyDown={onGridKeyDown}
           className="os:grid os:gap-1"
         >
@@ -449,7 +498,7 @@ export function SlotPanels({
             {customerMessage(slots.error)}
           </Notice>
         ) : null}
-        {emptyMonth && autoAdvance.current === 0 && month ? (
+        {emptyMonth && !advancing && month ? (
           <Notice
             tone="info"
             action={
@@ -492,14 +541,15 @@ export function SlotPanels({
               aria-labelledby={timesHeadingId}
               className="os:grid os:gap-1.5 os:p-0.5 os:grid-cols-[repeat(auto-fill,minmax(96px,1fr))] os:@min-[760px]:grid-cols-1 os:@min-[760px]:max-h-[300px] os:@min-[760px]:overflow-y-auto"
             >
-              {times.map((start) => {
+              {times.map((start, i) => {
                 const chosen = start === value
+                const label = labels[i]!
                 return (
                   <button
                     key={start}
                     type="button"
                     aria-pressed={chosen}
-                    aria-label={`${formatTime(start, timezone)}, ${formatDateLong(selectedDate)}`}
+                    aria-label={`${label}, ${formatDateLong(selectedDate)}`}
                     onClick={() => pickTime(start)}
                     className={cx(
                       'os:inline-flex os:items-center os:justify-center os:gap-1.5 os:min-h-[38px] os:rounded-md os:border os:font-mono os:text-sm os:font-semibold os:transition-colors',
@@ -509,7 +559,7 @@ export function SlotPanels({
                     )}
                   >
                     {chosen ? <Icon name="check" size={14} /> : null}
-                    {formatTime(start, timezone)}
+                    {label}
                   </button>
                 )
               })}
@@ -602,11 +652,23 @@ function DayCell({
 export type SlotPickerProps = Connection & {
   /** The service: its id or slug, or the service object from `useBusiness`. */
   service: string | (Pick<PublicService, 'id'> & Partial<PublicService>)
-  /** The chosen start (UTC ISO instant), or null. */
+  /**
+   * The chosen start (UTC ISO instant), or null. Passing the prop (even
+   * `null`) makes the picker controlled: it shows exactly this value and
+   * reports choices through `onChange`. Omit it to let the picker keep its
+   * own selection. Either way, a change of service, `host`,
+   * `publishableKey` or `client` clears the selection; a controlled picker
+   * then ignores the old value and calls `onChange(null)` once.
+   */
   value?: string | null
   /** Called with the chosen slot, or null when the choice is cleared. */
   onChange?: (slot: SelectedSlot | null) => void
-  /** The customer's timezone. Detected from the device when not given. */
+  /**
+   * The customer's timezone. Detected from the device when not given. A
+   * later change of the prop is applied (the chosen time is kept and shown
+   * in the new zone); the customer can still pick another zone in the
+   * dropdown, which `onTimezoneChange` reports.
+   */
   timezone?: string
   /** Called when the customer picks another timezone. */
   onTimezoneChange?: (timezone: string) => void
@@ -616,7 +678,8 @@ export type SlotPickerProps = Connection & {
 
 /**
  * Only the calendar and the times, for apps with their own form (C1). The
- * value is controlled when `value` is passed, else kept internally.
+ * value is controlled when `value` is passed, else kept internally (see
+ * `SlotPickerProps.value`).
  */
 export function SlotPicker({
   service,
@@ -631,7 +694,6 @@ export function SlotPicker({
   const business = useBusiness(connection as Connection)
   const [timezone, setTimezone] = useCustomerTimeZone(timezoneProp)
   const [internal, setInternal] = useState<string | null>(null)
-  const current = value === undefined ? internal : value
 
   const wanted = typeof service === 'string' ? service : service.id
   const resolved = business.data?.services.find(
@@ -642,6 +704,40 @@ export function SlotPicker({
   const durationMin =
     resolved?.durationMin ??
     (typeof service === 'string' ? undefined : service.durationMin)
+  const windowDays =
+    resolved?.windowDays ??
+    (typeof service === 'string' ? undefined : service.windowDays)
+
+  // What the selection belongs to. While a slug is still being resolved it
+  // is null, and that is not a change.
+  const identity = serviceId
+    ? `${connectionKey(connection as Connection)}|${serviceId}`
+    : null
+  const [owner, setOwner] = useState(identity)
+  // A controlled value that belonged to the previous service, ignored until
+  // the parent passes another.
+  const [stale, setStale] = useState<string | null>(null)
+  const [clears, setClears] = useState(0)
+  if (identity !== null && identity !== owner) {
+    setOwner(identity)
+    if (owner !== null) {
+      setInternal(null)
+      if (value) setStale(value)
+      if (value || (value === undefined && internal)) setClears((n) => n + 1)
+    }
+  }
+  if (stale !== null && value !== stale) setStale(null)
+  const current =
+    value === undefined ? internal : value === stale ? null : value
+
+  // Tell a parent its selection was cleared (after render, not during).
+  const onChangeRef = useRef(onChange)
+  useEffect(() => {
+    onChangeRef.current = onChange
+  })
+  useEffect(() => {
+    if (clears > 0) onChangeRef.current?.(null)
+  }, [clears])
 
   const frame =
     'os:bg-card os:text-foreground os:border os:border-border os:rounded-xl os:overflow-hidden os:grid os:grid-cols-1 os:@min-[760px]:grid-cols-[minmax(0,1fr)_260px]'
@@ -680,9 +776,12 @@ export function SlotPicker({
   } else {
     body = (
       <SlotPanels
+        key={identity}
         connection={connection as Connection}
         serviceId={serviceId}
         durationMin={durationMin}
+        windowDays={windowDays}
+        businessTimezone={business.data?.timezone}
         value={current}
         onChange={(slot) => {
           setInternal(slot?.start ?? null)

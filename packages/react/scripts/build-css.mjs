@@ -9,7 +9,9 @@
  *   `@layer base` or `@layer utilities` and the scoped specificity decides;
  * - `@property` registrations (global by nature) are dropped; the fallback
  *   block that gives `--tw-*` their initial values is kept, scoped;
- * - keyframes are renamed with an `openslots-` prefix.
+ * - keyframes are renamed with an `openslots-` prefix;
+ * - custom properties defined with color-mix() keep only that value, not
+ *   Tailwind's fallback (see the comment in `scope`).
  *
  *   node scripts/build-css.mjs           # build once
  *   node scripts/build-css.mjs --watch   # build, then rebuild on change
@@ -68,6 +70,34 @@ export function scope() {
         if (rule.params.includes('-webkit-hyphens') && rule.nodes) {
           rule.replaceWith(rule.nodes)
         }
+      })
+
+      // Tailwind gives a custom property that uses color-mix() a fallback
+      // (`--x: var(--primary)`) plus a nested `@supports` with the real
+      // value. For the derived soft surfaces that fallback would paint the
+      // full base color behind text; keep only the color-mix() value, so a
+      // browser without color-mix() finds the property invalid and falls
+      // through to the Voltage default.
+      root.walkAtRules('supports', (rule) => {
+        if (
+          rule.parent?.type !== 'rule' ||
+          !rule.params.includes('color-mix') ||
+          !rule.nodes?.every(
+            (n) => n.type === 'decl' && n.prop.startsWith('--'),
+          )
+        )
+          return
+        for (const decl of rule.nodes) {
+          rule.parent.each((sibling) => {
+            if (
+              sibling !== rule &&
+              sibling.type === 'decl' &&
+              sibling.prop === decl.prop
+            )
+              sibling.remove()
+          })
+        }
+        rule.replaceWith(rule.nodes)
       })
 
       const renamed = new Map()

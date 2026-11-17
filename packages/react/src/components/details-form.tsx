@@ -1,7 +1,7 @@
 'use client'
 
 import {
-  customerFieldsSchema,
+  customerFieldsFor,
   LIMITS,
   type CustomerFields,
   type PublicService,
@@ -29,20 +29,22 @@ export const emptyDraft: CustomerDraft = {
 export type FieldErrors = Partial<Record<keyof CustomerDraft, string>>
 
 /**
- * Validates the form with the same schema the server uses
- * (`customerFieldsSchema`), with messages written for customers. Phone and
- * notes are sent only when the service asks for them.
+ * Validates the form with the rules the server uses
+ * (`customerFieldsFor(service)` from `@openslots/core`, docs/TRD.md section
+ * 7), with messages written for customers: the phone is required when the
+ * service asks for it, notes are optional, and a field the service does not
+ * ask for is never sent.
  */
 export function validateCustomer(
   draft: CustomerDraft,
   service: Pick<PublicService, 'askPhone' | 'askNotes'>,
 ):
   { data: CustomerFields; errors: null } | { data: null; errors: FieldErrors } {
-  const parsed = customerFieldsSchema.safeParse({
+  const parsed = customerFieldsFor(service).safeParse({
     name: draft.name,
     email: draft.email.trim(),
-    phone: service.askPhone ? draft.phone : undefined,
-    notes: service.askNotes ? draft.notes : undefined,
+    phone: draft.phone,
+    notes: draft.notes,
   })
   if (parsed.success) return { data: parsed.data, errors: null }
   const errors: FieldErrors = {}
@@ -62,7 +64,9 @@ export function validateCustomer(
         ? 'Please enter your name.'
         : field === 'email'
           ? 'Please enter an email address, like name@example.com.'
-          : 'Please check this field.'
+          : field === 'phone'
+            ? 'Please enter a phone number.'
+            : 'Please check this field.'
   }
   return { data: null, errors }
 }
@@ -221,7 +225,7 @@ export function DetailsForm({
       </Field>
 
       {service.askPhone ? (
-        <Field label="Phone" optional error={errors.phone}>
+        <Field label="Phone" error={errors.phone}>
           {({ id, describedBy }) => (
             <input
               id={id}
@@ -229,6 +233,8 @@ export function DetailsForm({
               type="tel"
               autoComplete="tel"
               placeholder="(555) 010-0199"
+              required
+              maxLength={LIMITS.customerPhone + 20}
               value={draft.phone}
               onChange={(e) => set('phone')(e.target.value)}
               aria-invalid={errors.phone ? true : undefined}
