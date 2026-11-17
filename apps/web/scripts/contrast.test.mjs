@@ -50,3 +50,34 @@ test('large and bold text use the WCAG large-text thresholds', async () => {
     await browser.close()
   }
 })
+
+test('excludes disabled and occluded product text', async () => {
+  const browser = await chromium.launch()
+  try {
+    const page = await browser.newPage()
+    await page.setContent(
+      '<body><button disabled>Disabled</button><p>Visible</p><div style="position:relative"><span>Covered</span><div style="position:absolute;inset:0;background:white">Overlay</div></div></body>',
+    )
+    const rows = await measureContrast(page)
+    assert.ok(rows.some((row) => row.text === 'Visible'))
+    assert.ok(
+      !rows.some((row) => row.text === 'Disabled' || row.text === 'Covered'),
+    )
+  } finally {
+    await browser.close()
+  }
+})
+
+test('clips truncated text sampling to its visible ancestor bounds', async () => {
+  const browser = await chromium.launch()
+  try {
+    const page = await browser.newPage()
+    await page.setContent(
+      '<body style="background:black"><div style="width:50px;overflow:hidden;white-space:nowrap;background:white;color:black">A long truncated label that extends outside the white card</div></body>',
+    )
+    const [row] = await measureContrast(page)
+    assert.equal(row.ratio, 21)
+  } finally {
+    await browser.close()
+  }
+})

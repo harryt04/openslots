@@ -78,7 +78,8 @@ const ratio = (a, b) =>
 export async function measureContrast(page) {
   await page.evaluate(() => document.fonts.ready)
   const hideDevTools = await page.addStyleTag({
-    content: 'nextjs-portal { display: none !important }',
+    content:
+      'nextjs-portal { display: none !important } *, *::before, *::after { transition: none !important; animation: none !important }',
   })
   // Wrappers preserve inline metrics. Solid ink is painted inside the original
   // opacity/stacking ancestry, letting Chromium composite it over the actual page.
@@ -94,7 +95,9 @@ export async function measureContrast(page) {
       if (
         !parent ||
         !node.textContent.trim() ||
-        parent.closest('script,style,noscript,svg')
+        parent.closest(
+          'script,style,noscript,svg,nextjs-portal,.sr-only,[aria-hidden="true"],:disabled,[aria-disabled="true"]',
+        )
       )
         return []
       const style = getComputedStyle(parent)
@@ -107,7 +110,14 @@ export async function measureContrast(page) {
           r.bottom > 0 &&
           r.top < innerHeight &&
           r.right > 0 &&
-          r.left < innerWidth,
+          r.left < innerWidth &&
+          (() => {
+            const hit = document.elementFromPoint(
+              Math.max(0, Math.min(innerWidth - 1, r.x + r.width / 2)),
+              Math.max(0, Math.min(innerHeight - 1, r.y + r.height / 2)),
+            )
+            return hit && (parent.contains(hit) || hit.contains(parent))
+          })(),
       )
       if (
         !rects.length ||
@@ -125,15 +135,48 @@ export async function measureContrast(page) {
         {
           id,
           text: node.textContent.trim(),
+          selector: parent.id
+            ? `#${parent.id}`
+            : `${parent.tagName.toLowerCase()}.${[...parent.classList].join('.')}`,
           color: style.color,
           size: parseFloat(style.fontSize),
           weight: parseInt(style.fontWeight),
-          rects: rects.map((r) => ({
-            x: r.x,
-            y: r.y,
-            width: r.width,
-            height: r.height,
-          })),
+          rects: rects.map((r) => {
+            let left = r.left,
+              right = r.right,
+              top = r.top,
+              bottom = r.bottom
+            for (
+              let ancestor = parent;
+              ancestor;
+              ancestor = ancestor.parentElement
+            ) {
+              const computed = getComputedStyle(ancestor)
+              const box = ancestor.getBoundingClientRect()
+              if (
+                ['hidden', 'clip', 'auto', 'scroll'].includes(
+                  computed.overflowX,
+                )
+              ) {
+                left = Math.max(left, box.left)
+                right = Math.min(right, box.right)
+              }
+              if (
+                ['hidden', 'clip', 'auto', 'scroll'].includes(
+                  computed.overflowY,
+                )
+              ) {
+                top = Math.max(top, box.top)
+                bottom = Math.min(bottom, box.bottom)
+              }
+            }
+            return {
+              x: left,
+              y: top,
+              width: Math.max(0, right - left),
+              height: Math.max(0, bottom - top),
+            }
+          }),
         },
       ]
     })
