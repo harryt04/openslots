@@ -16,9 +16,18 @@ export async function GET(request: Request) {
   const session = await requireSession()
   if (!(await ownedAccounts(session.user.id)).some((a) => a.id === id))
     return new Response(null, { status: 403 })
-  return Response.json(
-    globalFake.openSlotsCalendars?.get(id) ?? seedFakeCalendar(id),
-  )
+  const state = globalFake.openSlotsCalendars?.get(id) ?? seedFakeCalendar(id)
+  // Like Google, the fake keeps a deleted event as a cancelled tombstone.
+  // Tests ask "what is on the calendar", so report live events as `events`
+  // and the tombstones separately.
+  const entries = Object.entries(state.events)
+  const cancelled = ([, value]: (typeof entries)[number]) =>
+    value.event.status === 'cancelled'
+  return Response.json({
+    ...state,
+    events: Object.fromEntries(entries.filter((entry) => !cancelled(entry))),
+    deletedEvents: Object.fromEntries(entries.filter(cancelled)),
+  })
 }
 export async function PUT(request: Request) {
   if (process.env.NODE_ENV === 'production' || !isFakeGoogle())
