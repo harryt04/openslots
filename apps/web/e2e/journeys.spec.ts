@@ -336,6 +336,12 @@ test('one owner switches between two businesses with isolated schedules, service
   ).toBeVisible()
   await page.getByRole('button', { name: /Connect signed-in/ }).click()
   await expect(page.getByText('New bookings go here')).toBeVisible()
+  await page.getByRole('switch').first().click()
+  await expect(page.getByRole('switch').first()).toHaveAttribute(
+    'aria-checked',
+    'false',
+  )
+  await expect(page.getByRole('status')).toHaveText('Saved')
   await page.getByRole('link', { name: /^Services(?: \d+)?$/ }).click()
   await expect(page.getByText('Alpha Trim', { exact: true })).toHaveCount(0)
   await page.getByRole('link', { name: 'New service', exact: true }).click()
@@ -396,6 +402,12 @@ test('one owner switches between two businesses with isolated schedules, service
       await expect(
         page.getByLabel('Monday start', { exact: true }),
       ).toHaveValue(hour!)
+      await page.getByRole('link', { name: /^Calendars/ }).click()
+      await expect(page.getByText('New bookings go here')).toBeVisible()
+      await expect(page.getByRole('switch').first()).toHaveAttribute(
+        'aria-checked',
+        name === 'Business Alpha' ? 'true' : 'false',
+      )
       expect(await keyOnScreen()).toBe(key)
       await page.getByRole('link', { name: 'Settings', exact: true }).click()
       await expect(page.getByLabel('Business name')).toHaveValue(name!)
