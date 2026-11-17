@@ -23,6 +23,24 @@ export function todayIn(timeZone: string, now = new Date()): string {
   return localDateOf(now, timeZone)
 }
 
+/**
+ * The last month the calendar needs to offer for a booking window of
+ * `windowDays` days from today in the business's timezone.
+ *
+ * One day is added on purpose: the window is counted in the business's
+ * calendar, but the grid shows the customer's. The last bookable afternoon
+ * in Denver is already the next day in Tokyo, which can be the next month.
+ * The server still decides which days have openings; this only decides how
+ * far the month buttons go.
+ */
+export function lastWindowMonth(
+  businessTimeZone: string,
+  windowDays: number,
+  now: Date,
+): string {
+  return monthOf(addDays(todayIn(businessTimeZone, now), windowDays + 1))
+}
+
 export function monthOf(date: string): string {
   return date.slice(0, 7)
 }

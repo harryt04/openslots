@@ -33,6 +33,7 @@ import {
   weekday,
   weekdayLong,
   weekdayShort,
+  lastWindowMonth,
 } from '../time'
 import { Icon } from './icons'
 import { cx, Root, type Theme } from './root'
@@ -266,9 +267,7 @@ export function SlotPanels({
     : windowDays !== undefined && now
       ? maxOf(
           minMonth,
-          monthOf(
-            addDays(todayIn(businessTimezone ?? timezone, now), windowDays),
-          ),
+          lastWindowMonth(businessTimezone ?? timezone, windowDays, now),
         )
       : addMonths(minMonth, MAX_MONTHS_AHEAD)
   const canPrev = !!month && !!minMonth && month > minMonth
