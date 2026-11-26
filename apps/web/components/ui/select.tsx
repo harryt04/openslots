@@ -54,11 +54,38 @@ function SelectContent({
 }) {
   const [list, setList] = React.useState<HTMLDivElement | null>(null)
 
+  // UI SDK focuses the selected item on open without scrolling to it when the
+  // list cannot sit over the trigger (long lists such as time zones), so bring
+  // it into view once the list has its size. Layout offsets, not client
+  // rects, because the opening animation scales the popup.
+  React.useEffect(() => {
+    if (!list) return
+    const frame = requestAnimationFrame(() => {
+      const item = list.querySelector<HTMLElement>("[data-selected]")
+      if (!item) return
+      const top =
+        item.offsetParent === list
+          ? item.offsetTop
+          : item.offsetParent === list.offsetParent
+            ? item.offsetTop - list.offsetTop - list.clientTop
+            : null
+      if (top === null) {
+        item.scrollIntoView({ block: "nearest" })
+        return
+      }
+      const bottom = top + item.offsetHeight
+      if (top >= list.scrollTop && bottom <= list.scrollTop + list.clientHeight)
+        return
+      list.scrollTop = top - (list.clientHeight - item.offsetHeight) / 2
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [list])
+
   return (
     <Primitive.SelectContent
       className={cn(
         "relative z-50 flex max-h-(--available-height) min-h-0 min-w-[8rem] origin-(--transform-origin) flex-col overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
-        position === "popper" && "min-w-(--anchor-width)",
+        "min-w-(--anchor-width)",
         className,
       )}
       alignItemWithTrigger={position === "item-aligned"}
