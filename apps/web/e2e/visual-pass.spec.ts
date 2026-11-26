@@ -160,7 +160,9 @@ test('automated visual state inventory', async ({ page, browser }) => {
       id: 'S5-invalid',
       url: '/availability',
       action: async () => {
-        await page.getByLabel('Thursday end', { exact: true }).fill('8 AM')
+        await page
+          .getByLabel('Thursday range 1 end', { exact: true })
+          .fill('8 AM')
         await page.getByRole('button', { name: 'Save changes' }).click()
       },
     },

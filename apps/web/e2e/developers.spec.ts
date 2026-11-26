@@ -17,7 +17,9 @@ test('developers settings and a public API booking journey', async ({
   const keyInput = page.getByLabel('Publishable key', { exact: true })
   const oldKey = await keyInput.inputValue()
   await page.getByRole('button', { name: 'Copy', exact: true }).click()
-  await expect(page.getByRole('status')).toHaveText('Key copied')
+  await expect(page.getByRole('main').getByRole('status')).toHaveText(
+    'Key copied',
+  )
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(oldKey)
   await page.getByRole('button', { name: 'Rotate key' }).focus()
   await page.keyboard.press('Tab')
@@ -40,7 +42,9 @@ test('developers settings and a public API booking journey', async ({
   )
   await page.getByLabel('Site origin').fill('http://example.com/path')
   await page.getByRole('button', { name: 'Add site' }).click()
-  await expect(page.getByRole('status')).toContainText('Enter an origin')
+  await expect(page.getByRole('main').getByRole('status')).toContainText(
+    'Enter an origin',
+  )
   await page.getByLabel('Site origin').fill('https://embed.example.test')
   await page.getByRole('button', { name: 'Add site' }).click()
   await page

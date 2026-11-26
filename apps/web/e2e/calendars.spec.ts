@@ -29,7 +29,7 @@ test('calendar linking, choices, auth failure and reconnect', async ({
     'aria-checked',
     'false',
   )
-  await expect(page.getByRole('status')).toHaveText('Saved')
+  await expect(page.getByRole('main').getByRole('status')).toHaveText('Saved')
   await page
     .getByRole('button', { name: 'Link another Google account' })
     .click()

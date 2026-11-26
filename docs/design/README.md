@@ -8,7 +8,7 @@
 - The booking mockups (`S8`, `S9`, `C1`) are interactive. Their behaviour is the reference behaviour for `@openslots/react`.
 - The `<style>` block at the top holds the design tokens under shadcn variable names. **Voltage** is the adopted theme. Copy its light and dark values into `apps/web/app/globals.css`; do not invent colors.
 - One name differs in the app. shadcn/ui components use the `accent` utility for quiet hover surfaces, which the spec paints with `--primary-soft`. So in `apps/web`, `bg-accent` is primary-soft and the spec's tangerine `--accent` is `bg-accent-strong`. The CSS variable `--accent` keeps the spec's value.
-- The mockups are hand-written HTML that imitates shadcn/ui. The real app uses actual shadcn/ui components (new-york style, Tailwind v4). Match layout, hierarchy, color and states; pixel-identical spacing is not required.
+- The mockups are hand-written HTML that imitates shadcn/ui. The real app uses local new-york style wrappers (UI SDK and retained Radix primitives, Tailwind v4). Match layout, hierarchy, color and states; pixel-identical spacing is not required.
 
 ## Validating work against it
 

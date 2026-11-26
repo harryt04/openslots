@@ -112,7 +112,12 @@ export function CalendarSettings({
       )}
       <div className="space-y-4">
         {links.map((l) => (
-          <section key={l.accountId} className="rounded-xl border bg-card p-5">
+          <section
+            data-agent-hidden=""
+            data-agent-secret=""
+            key={l.accountId}
+            className="rounded-xl border bg-card p-5"
+          >
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <span className="flex size-10 items-center justify-center rounded-full bg-muted font-semibold">

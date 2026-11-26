@@ -135,6 +135,7 @@ export default async function Home({
         <form className="flex gap-2">
           <input type="hidden" name="tab" value={tab} />
           <Input
+            agentEditable
             name="q"
             aria-label="Search customers"
             placeholder="Search customers"

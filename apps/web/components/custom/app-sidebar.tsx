@@ -247,7 +247,7 @@ export function AppSidebar({
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter>
+      <SidebarFooter data-agent-hidden="" data-agent-secret="">
         <div className="flex items-center gap-2 border-t border-sidebar-border p-2 pt-3">
           <span
             aria-hidden="true"

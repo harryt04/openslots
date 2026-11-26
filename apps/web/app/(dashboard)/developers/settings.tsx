@@ -50,7 +50,11 @@ export function Settings({
   }
   const snippet = `import { BookingFlow } from '@openslots/react'\nimport '@openslots/react/styles.css'\n\nexport default function Book() {\n  return <BookingFlow\n  host="${host}"\n  publishableKey="${publishableKey}"\n  />\n}`
   return (
-    <div className="grid min-w-0 gap-6 lg:grid-cols-2">
+    <div
+      data-agent-hidden=""
+      data-agent-secret=""
+      className="grid min-w-0 gap-6 lg:grid-cols-2"
+    >
       <div className="min-w-0 space-y-6">
         <section className="min-w-0 space-y-4 rounded-xl border bg-card p-6">
           <h2 className="font-semibold">Publishable key</h2>
@@ -132,7 +136,7 @@ export function Settings({
               aria-label="Site origin"
               placeholder="https://example.com"
               value={origin}
-              onChange={(e) => setOrigin(e.target.value)}
+              onValueChange={setOrigin}
             />
             <Button disabled={pending}>Add site</Button>
           </form>
