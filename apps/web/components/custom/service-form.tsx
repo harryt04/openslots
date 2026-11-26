@@ -14,7 +14,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useState, useTransition } from 'react'
 import { useForm, useWatch, type Control } from 'react-hook-form'
-import { toast } from 'sonner'
+import { toast } from '@/components/ui/sonner'
 
 import { PageHeader } from '@/components/custom/page-header'
 import { ServicePreview } from '@/components/custom/service-preview'
@@ -227,11 +227,15 @@ export function ServiceForm({
                 <FormField
                   control={form.control}
                   name="name"
-                  render={({ field }) => (
+                  render={({ field: { onChange, ...field } }) => (
                     <FormItem>
                       <FormLabel>Name</FormLabel>
                       <FormControl>
-                        <Input placeholder="Full color" {...field} />
+                        <Input
+                          placeholder="Full color"
+                          {...field}
+                          onValueChange={onChange}
+                        />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -258,7 +262,7 @@ export function ServiceForm({
                                   value={c}
                                   aria-label={SERVICE_COLOR_LABEL[c]}
                                   className={cn(
-                                    'size-6 rounded-md border-0 shadow-none [&_[data-slot=radio-group-indicator]]:hidden',
+                                    'size-6 rounded-md border-0 shadow-none [&_[data-openslots-radio-indicator]]:hidden',
                                     SERVICE_SWATCH_CLASS[c],
                                     selected &&
                                       'ring-2 ring-foreground ring-offset-2 ring-offset-card',
@@ -287,7 +291,7 @@ export function ServiceForm({
               <FormField
                 control={form.control}
                 name="description"
-                render={({ field }) => (
+                render={({ field: { onChange, ...field } }) => (
                   <FormItem>
                     <FormLabel>Description shown to customers</FormLabel>
                     <FormControl>
@@ -295,6 +299,7 @@ export function ServiceForm({
                         rows={2}
                         placeholder="All-over color or balayage. Includes wash and blow dry."
                         {...field}
+                        onValueChange={onChange}
                       />
                     </FormControl>
                     <FormMessage />
@@ -361,9 +366,13 @@ export function ServiceForm({
                             name={field.name}
                             ref={field.ref}
                             onBlur={field.onBlur}
-                            value={Number.isNaN(field.value) ? '' : field.value}
-                            onChange={(e) =>
-                              field.onChange(e.target.valueAsNumber)
+                            value={
+                              Number.isNaN(field.value)
+                                ? ''
+                                : String(field.value)
+                            }
+                            onValueChange={(value) =>
+                              field.onChange(value === '' ? NaN : Number(value))
                             }
                           />
                         </FormControl>

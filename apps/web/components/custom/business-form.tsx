@@ -4,7 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
-import { toast } from 'sonner'
+import { toast } from '@/components/ui/sonner'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -108,7 +108,7 @@ export function BusinessForm({
         <FormField
           control={form.control}
           name="name"
-          render={({ field }) => (
+          render={({ field: { onChange, ...field } }) => (
             <FormItem>
               <FormLabel>Business name</FormLabel>
               <FormControl>
@@ -116,10 +116,10 @@ export function BusinessForm({
                   autoComplete="organization"
                   placeholder="Shear Bliss Salon"
                   {...field}
-                  onChange={(event) => {
-                    field.onChange(event)
+                  onValueChange={(value) => {
+                    onChange(value)
                     if (!slugTouched.current) {
-                      form.setValue('slug', slugify(event.target.value), {
+                      form.setValue('slug', slugify(value), {
                         shouldValidate: form.formState.isSubmitted,
                       })
                     }
@@ -133,7 +133,7 @@ export function BusinessForm({
         <FormField
           control={form.control}
           name="slug"
-          render={({ field }) => (
+          render={({ field: { onChange, ...field } }) => (
             <FormItem>
               <FormLabel>Booking page address</FormLabel>
               <FormControl>
@@ -142,9 +142,9 @@ export function BusinessForm({
                   autoCapitalize="none"
                   spellCheck={false}
                   {...field}
-                  onChange={(event) => {
+                  onValueChange={(value) => {
                     slugTouched.current = true
-                    field.onChange(event)
+                    onChange(value)
                   }}
                 />
               </FormControl>

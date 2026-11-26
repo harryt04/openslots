@@ -75,6 +75,8 @@ export function BookingRow({
   return (
     <>
       <button
+        data-agent-hidden=""
+        data-agent-secret=""
         type="button"
         onClick={() => {
           setHost(location.origin)
@@ -122,6 +124,8 @@ export function BookingRow({
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
+          data-agent-hidden=""
+          data-agent-secret=""
           className={
             step === 'reschedule'
               ? 'max-h-[90vh] overflow-y-auto sm:max-w-3xl'

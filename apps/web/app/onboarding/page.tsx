@@ -18,7 +18,10 @@ export default async function OnboardingPage() {
   const first = existing.length === 0
 
   return (
-    <main className="grid min-h-screen place-content-center p-6">
+    <main
+      data-agent-hidden=""
+      className="grid min-h-screen place-content-center p-6"
+    >
       <div className="grid w-full max-w-md gap-6">
         <Logo />
         <div>

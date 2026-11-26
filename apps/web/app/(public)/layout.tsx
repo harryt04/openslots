@@ -11,5 +11,9 @@ export default function PublicLayout({
 }: {
   children: React.ReactNode
 }) {
-  return <>{children}</>
+  return (
+    <div data-agent-hidden="" data-agent-secret="">
+      {children}
+    </div>
+  )
 }

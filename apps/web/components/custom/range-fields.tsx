@@ -31,7 +31,7 @@ function TimeField({
       autoComplete="off"
       spellCheck={false}
       className="w-[108px] font-mono"
-      onChange={(event) => onChange(event.target.value)}
+      onValueChange={onChange}
       onBlur={() => {
         // Tidy "9am" into "9:00 AM"; leave anything unreadable to show its error.
         const parsed = parseTime(value, asEnd)

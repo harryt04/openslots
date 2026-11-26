@@ -4,7 +4,7 @@ import type { ServiceColor } from '@openslots/core'
 import { Copy, Pencil } from 'lucide-react'
 import Link from 'next/link'
 import { useState, useTransition } from 'react'
-import { toast } from 'sonner'
+import { toast } from '@/components/ui/sonner'
 
 import { StatusBadge } from '@/components/custom/status-badge'
 import { Button } from '@/components/ui/button'

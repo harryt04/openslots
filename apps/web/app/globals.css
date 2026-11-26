@@ -1,3 +1,4 @@
+@layer ui-sdk;
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
@@ -225,4 +226,36 @@
 }
 [aria-invalid='true']:is(input, textarea, select, button) {
   border-width: 2px;
+}
+
+.openslots-toaster {
+  height: var(--toast-front-height);
+}
+
+.openslots-toaster[data-expanded] {
+  height: calc(var(--toast-stack-height) + (var(--toast-count) - 1) * 12px);
+}
+
+.openslots-toaster [data-slot='toast'] {
+  --stack-y: calc(var(--toast-index) * -12px);
+  height: var(--toast-front-height);
+  z-index: calc(100 - var(--toast-index));
+  translate: var(--toast-swipe-x, 0px)
+    calc(var(--stack-y) + var(--toast-swipe-y, 0px));
+  scale: calc(1 - var(--toast-index) * 0.05);
+  transition:
+    translate 180ms,
+    scale 180ms;
+}
+
+.openslots-toaster [data-slot='toast'][data-expanded] {
+  --stack-y: calc(-1 * (var(--toast-offset) + var(--toast-index) * 12px));
+  height: var(--toast-height);
+  scale: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .openslots-toaster [data-slot='toast'] {
+    transition: none;
+  }
 }

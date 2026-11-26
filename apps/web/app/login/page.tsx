@@ -12,7 +12,7 @@ export default async function Login({
 }) {
   const { error } = await searchParams
   return (
-    <main className="min-h-screen">
+    <main data-agent-hidden="" className="min-h-screen">
       <div className="grid min-h-screen md:grid-cols-2">
         <section className="flex min-h-80 flex-col justify-between gap-6 bg-linear-to-br from-primary to-[color-mix(in_srgb,var(--primary)_55%,var(--accent))] p-10 text-[var(--brand-panel-foreground)]">
           <Logo className="[&_i]:bg-primary [&_i:nth-child(3)]:bg-accent-strong [&>span]:bg-[var(--brand-panel-foreground)]" />

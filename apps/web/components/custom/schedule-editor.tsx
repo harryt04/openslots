@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState, useTransition } from 'react'
-import { toast } from 'sonner'
+import { toast } from '@/components/ui/sonner'
 
 import {
   createScheduleAction,
@@ -315,6 +315,8 @@ export function ScheduleEditor({ schedules }: { schedules: ScheduleView[] }) {
       ) : null}
 
       <Tabs
+        agentNavigable
+        aria-label="Schedules"
         value={id}
         onValueChange={(value) => {
           setSelectedId(value)
@@ -558,7 +560,7 @@ export function ScheduleEditor({ schedules }: { schedules: ScheduleView[] }) {
                 id="schedule-name"
                 value={renameText}
                 maxLength={100}
-                onChange={(event) => setRenameText(event.target.value)}
+                onValueChange={setRenameText}
               />
             </div>
             <DialogFooter>

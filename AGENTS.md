@@ -13,15 +13,29 @@ If the code and these documents disagree, say so and fix whichever is wrong in t
 
 ## Rules
 
-- **Stack is fixed:** Next.js App Router, TypeScript strict, Tailwind v4, shadcn/ui (new-york), Better Auth, MongoDB native driver, pnpm. Do not add Postgres, an ORM, another auth library or another UI kit.
+- **Stack is fixed:** Next.js App Router, TypeScript strict, Tailwind v4, new-york styled local UI wrappers, Better Auth, MongoDB native driver, pnpm. Do not add Postgres, an ORM, another auth library or another UI kit.
 - **MongoDB has no transactions here.** Booking correctness relies on the unique index on `slot_locks` (TRD section 5). Do not replace it with a read-then-write check.
 - **The slot engine is pure** and lives in `packages/core`. Nothing else computes availability.
 - **One booking UI.** The hosted pages use `@openslots/react` from the workspace.
-- **Add shadcn components with the CLI** (`pnpm dlx shadcn@latest add <name>`); do not hand-edit `components/ui`.
 - **Colors come from tokens.** No raw hex in components except the isolated Google brand mark SVG; `apps/web/app/globals.css` is the only file in the app that holds color values, and `packages/react/src/styles.css` the only one in the booking package. Any state shown with color also needs an icon, label or text decoration; never rely on red versus green. The maintainer is colorblind.
 - **Next.js 16 uses `proxy.ts`**, exporting `proxy`, not `middleware.ts`.
 - **Secrets stay out of the repository.** Document new variables in `.env.example` and TRD section 10.
 - **Every admin query is scoped** to a business owned by the session's user.
+
+## UI SDK
+
+UI SDK provides unstyled React primitives for focus, keyboard interaction, accessible semantics and WebMCP. Its API postdates model training data. Before touching components, read `node_modules/@ui-sdk/react/docs/llms.txt` and `node_modules/@ui-sdk/core/skills/ui-sdk/SKILL.md` from `apps/web`, then the installed component pages. Both packages are beta and pinned exactly to `0.1.0-beta.17`.
+
+App code imports from `@/components/ui`. Add a local wrapper using per-component entries such as `@ui-sdk/react/tabs`. Never run `shadcn add` or regenerate these wrappers, which would restore Radix primitives. Keep the Voltage tokens and Tailwind classes. The app declares the UI SDK layer and omits its optional global stylesheet. Use the documented state attributes. UI SDK owns its slot names, so give app-specific CSS and test hooks a separate attribute. Bind controlled text fields with `value` and `onValueChange`. Verify keyboard behavior, accessible names, focus return, form submission and hydration when changing primitives. Portal popups from forms to the body.
+
+The root layout mounts `components/agent-bridge.tsx` once. Review every new interactive control against `lib/agent-policy.ts` and its tests. Snapshot and query provide reads. Local tab selection and ordinary text edits can be enabled on reviewed controls. Input and tab wrappers set a confirmation marker by default. Enable an eligible field with `agentEditable` or tab group with `agentNavigable`, then add its route and accessible name to the policy. A marked step is denied, as are button presses, unknown actions and changes to bookings, payments, credentials, accounts or settings. Keep private field values inside `data-agent-secret`. Use `data-agent-hidden` where the labels or available actions would also disclose personal information.
+
+Keep these compatibility components until their existing behavior is verified on a replacement:
+
+- Radix alert dialogs and dialogs preserve cancel focus, application close-focus callbacks, portals and form behavior. Sheets preserve the sidebar’s edge geometry and mobile focus trap.
+- Radix menus, popovers and tooltips preserve slotted triggers, anchor placement, offsets, arrows and collision handling. Select also needs item-aligned placement and scroll buttons.
+- Single-selection toggle groups currently expose radios to assistive technology. UI SDK toggle groups expose pressed buttons. Keep the group semantics shared by service forms and their browser tests.
+- The form, badge, button and sidebar keep Slot for child composition. Calendar uses DayPicker for date grids and month navigation. The local sonner wrapper exposes the UI SDK toast queue to client forms. Alert, badge, card and skeleton retain their presentational markup.
 
 ## Workflow
 
@@ -62,7 +76,6 @@ Run one package with `pnpm --filter @openslots/core test` (or `@openslots/react`
 - **Development-only routes live under `apps/web/app/dev/`** and return 404 in production. `/dev/calendar` seeds and inspects fake account calendar state. `/dev/tokens` shows every token and base primitive in light and dark. `/dev/gallery` shows every `@openslots/react` export against a mock API, in each state, embedded in a hostile host page, resizable and at phone width.
 - **`@openslots/react` styles are compiled, not part of the app's Tailwind.** Components use `os:`-prefixed classes that only `packages/react/scripts/build-css.mjs` compiles, into `packages/react/dist/styles.css` scoped under `.openslots`. The app imports it as `@openslots/react/styles.css`; `dev`, `dev:fake` and `build` build it first (with plain `pnpm run dev`, run `pnpm --filter @openslots/react dev` beside it to pick up style changes). A host's tokens win over the package's Voltage defaults, and in the package `--accent` is the tangerine, not the app's `bg-accent` remapping. Never style the package from the app, and do not add unprefixed Tailwind classes inside `packages/react`.
 - **Workspace packages export TypeScript source** to the app (`exports` in their `package.json`); `publishConfig` points npm at `dist`. The app does not need the packages built first.
-- **The shadcn CLI may write a wrong `cn` import** (`from "cn"`) into new components in this workspace. Correct it to `@/lib/utils`; that is the one hand-edit allowed in `components/ui`.
 - **Public customer pages are `app/(public)/b` and `app/(public)/m`.** They have no sidebar, no PostHog (only the `(dashboard)` layout mounts it) and a CSP without analytics hosts. They look businesses up with `lib/public-pages/lookup.ts`, then call `/api/v1` from the browser through `@openslots/react`; never add booking logic or availability to them. The Playwright helper `e2e/support/salon.ts` sets an owner up through the real admin screens.
 - **Import zod as a namespace in `packages/`** (`import * as z from 'zod'`). `import { z }` drags every zod locale into an embedder's bundle.
 - **The Docker image is verified in CI**, not locally: the `Docker image` job builds it, starts it with `docker compose`, and smoke-tests it.

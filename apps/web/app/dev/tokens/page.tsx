@@ -125,7 +125,11 @@ export default function Tokens() {
             <Button disabled>Disabled</Button>
           </div>
           <div className="flex flex-wrap items-center gap-6">
-            <Tabs defaultValue="upcoming">
+            <Tabs
+              agentNavigable
+              aria-label="Booking status"
+              defaultValue="upcoming"
+            >
               <TabsList>
                 <TabsTrigger value="upcoming">Upcoming</TabsTrigger>
                 <TabsTrigger value="past">Past</TabsTrigger>
@@ -143,7 +147,7 @@ export default function Tokens() {
           </div>
           <div className="grid max-w-sm gap-1.5">
             <Label htmlFor="sample">Name</Label>
-            <Input id="sample" defaultValue="Full color" />
+            <Input agentEditable id="sample" defaultValue="Full color" />
             <p className="text-xs text-muted-foreground">
               Hint text in muted-foreground.
             </p>

@@ -363,7 +363,7 @@ test('one owner switches between two businesses with isolated schedules, service
     'aria-checked',
     'false',
   )
-  await expect(page.getByRole('status')).toHaveText('Saved')
+  await expect(page.getByRole('main').getByRole('status')).toHaveText('Saved')
   await page.getByRole('link', { name: /^Services(?: \d+)?$/ }).click()
   await expect(page.getByText('Alpha Trim', { exact: true })).toHaveCount(0)
   await page.getByRole('link', { name: 'New service', exact: true }).click()

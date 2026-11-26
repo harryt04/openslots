@@ -32,7 +32,9 @@ test('page families set browser security headers, including unknown manage links
 test('calendar notices cannot display URL supplied prose', async ({ page }) => {
   await createSalon(page, { services: [] })
   await page.goto('/calendars?notice=Your%20account%20was%20hacked')
-  await expect(page.getByRole('status')).not.toContainText('hacked')
+  await expect(page.getByRole('main').getByRole('status')).not.toContainText(
+    'hacked',
+  )
   await expect(page.getByText('Checked just now')).toBeVisible()
 })
 

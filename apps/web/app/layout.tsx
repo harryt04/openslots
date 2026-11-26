@@ -4,6 +4,7 @@ import { GeistSans } from 'geist/font/sans'
 
 import './globals.css'
 
+import { AgentBridge } from '@/components/agent-bridge'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -34,6 +35,7 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
+          <AgentBridge />
           <TooltipProvider>{children}</TooltipProvider>
           <Toaster />
         </ThemeProvider>

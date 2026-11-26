@@ -40,7 +40,12 @@ export function TestSignIn() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="grid w-80 gap-4">
+    <form
+      data-agent-hidden=""
+      data-agent-secret=""
+      onSubmit={handleSubmit}
+      className="grid w-80 gap-4"
+    >
       <div>
         <h1 className="text-xl font-semibold tracking-tight">Test sign-in</h1>
         <p className="text-sm text-muted-foreground">
@@ -54,17 +59,12 @@ export function TestSignIn() {
           type="email"
           required
           value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          onValueChange={setEmail}
         />
       </div>
       <div className="grid gap-1.5">
         <Label htmlFor="name">Name</Label>
-        <Input
-          id="name"
-          required
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
+        <Input id="name" required value={name} onValueChange={setName} />
       </div>
       {error ? (
         <p role="alert" className="text-sm font-medium text-destructive">
