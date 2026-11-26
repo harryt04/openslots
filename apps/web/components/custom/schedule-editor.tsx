@@ -360,7 +360,13 @@ export function ScheduleEditor({ schedules }: { schedules: ScheduleView[] }) {
             </Label>
             <Select
               value={draft.timezone}
-              onValueChange={(timezone) => edit({ timezone })}
+              items={timeZoneOptions(draft.timezone).map((value) => ({
+                value,
+                label: timeZoneLabel(value),
+              }))}
+              onValueChange={(timezone) => {
+                if (timezone !== null) edit({ timezone })
+              }}
             >
               <SelectTrigger id="schedule-timezone" className="w-auto max-w-72">
                 <SelectValue>{timeZoneLabel(draft.timezone)}</SelectValue>

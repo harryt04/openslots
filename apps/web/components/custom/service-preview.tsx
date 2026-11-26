@@ -213,7 +213,7 @@ function DayPreview({
                 key={iso}
                 value={iso}
                 aria-label={`Show ${formatClock(startMins[i]!)}`}
-                className="h-7 rounded-full px-2.5 font-mono text-xs data-[spacing=1]:rounded-full data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                className="h-7 rounded-full px-2.5 font-mono text-xs data-checked:border-primary data-checked:bg-primary data-checked:text-primary-foreground data-[spacing=1]:rounded-full"
               >
                 {i === selectedIndex ? <Check aria-hidden="true" /> : null}
                 {formatClock(startMins[i]!)}

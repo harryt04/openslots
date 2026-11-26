@@ -533,12 +533,7 @@ export function ManageBooking({
           // The dialog is opened from state, not from a trigger, so put the
           // keyboard focus back on the button it came from. After a
           // cancellation that button is gone and the result heading takes it.
-          onCloseAutoFocus={(event) => {
-            if (cancelButton.current) {
-              event.preventDefault()
-              cancelButton.current.focus()
-            }
-          }}
+          finalFocus={() => cancelButton.current ?? headingRef.current}
         >
           <AlertDialogHeader>
             <AlertDialogTitle>Cancel this booking?</AlertDialogTitle>

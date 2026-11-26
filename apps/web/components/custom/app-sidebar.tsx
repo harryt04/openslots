@@ -23,6 +23,7 @@ import { ThemeSwitcher } from '@/components/custom/theme-switcher'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -164,50 +165,57 @@ export function AppSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <SidebarMenuButton
-                  size="lg"
-                  className="h-auto border border-sidebar-border bg-card p-2"
-                  aria-label={`Business: ${current.name}. Switch business`}
-                >
-                  <BusinessAvatar name={current.name} />
-                  <span className="grid min-w-0 flex-1 text-left leading-tight">
-                    <span className="truncate text-[13px] font-semibold">
-                      {current.name}
+              <DropdownMenuTrigger
+                render={
+                  <SidebarMenuButton
+                    size="lg"
+                    className="h-auto border border-sidebar-border bg-card p-2"
+                    aria-label={`Business: ${current.name}. Switch business`}
+                  >
+                    <BusinessAvatar name={current.name} />
+                    <span className="grid min-w-0 flex-1 text-left leading-tight">
+                      <span className="truncate text-[13px] font-semibold">
+                        {current.name}
+                      </span>
+                      <span className="text-[11px] text-muted-foreground">
+                        {businesses.length}{' '}
+                        {businesses.length === 1 ? 'business' : 'businesses'}
+                      </span>
                     </span>
-                    <span className="text-[11px] text-muted-foreground">
-                      {businesses.length}{' '}
-                      {businesses.length === 1 ? 'business' : 'businesses'}
-                    </span>
-                  </span>
-                  <ChevronsUpDown className="ml-auto" />
-                </SidebarMenuButton>
-              </DropdownMenuTrigger>
+                    <ChevronsUpDown className="ml-auto" />
+                  </SidebarMenuButton>
+                }
+              />
               <DropdownMenuContent
                 align="start"
-                className="w-(--radix-dropdown-menu-trigger-width) min-w-56"
+                className="w-(--anchor-width) min-w-56"
               >
-                <DropdownMenuLabel>Your businesses</DropdownMenuLabel>
-                {businesses.map((b) => (
-                  <DropdownMenuItem
-                    key={b.id}
-                    disabled={switching}
-                    onSelect={() =>
-                      startSwitch(() => switchBusinessAction(b.id))
-                    }
-                  >
-                    <BusinessAvatar name={b.name} />
-                    <span className="min-w-0 flex-1 truncate">{b.name}</span>
-                    {b.id === currentId ? (
-                      <Check aria-label="Current business" />
-                    ) : null}
-                  </DropdownMenuItem>
-                ))}
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>Your businesses</DropdownMenuLabel>
+                  {businesses.map((b) => (
+                    <DropdownMenuItem
+                      key={b.id}
+                      value={b.id}
+                      label={b.name}
+                      disabled={switching}
+                      onSelect={() =>
+                        startSwitch(() => switchBusinessAction(b.id))
+                      }
+                    >
+                      <BusinessAvatar name={b.name} />
+                      <span className="min-w-0 flex-1 truncate">{b.name}</span>
+                      {b.id === currentId ? (
+                        <Check aria-label="Current business" />
+                      ) : null}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuGroup>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link href="/onboarding">
-                    <Plus /> Add a business
-                  </Link>
+                <DropdownMenuItem
+                  value="add-business"
+                  render={<Link href="/onboarding" />}
+                >
+                  <Plus /> Add a business
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

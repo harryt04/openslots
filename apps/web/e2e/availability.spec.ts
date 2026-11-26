@@ -13,10 +13,10 @@ async function signInWithBusiness(page: Page) {
   await expect(page).toHaveURL(/\/availability$/)
 }
 
-async function pickDate(page: Page, monthsAhead: number, label: RegExp) {
+async function pickDate(page: Page, monthsAhead: number, label: string) {
   for (let i = 0; i < monthsAhead; i++)
     await page.getByRole('button', { name: 'Go to the Next Month' }).click()
-  await page.getByRole('button', { name: label }).click()
+  await page.getByRole('gridcell', { name: label, exact: true }).click()
 }
 
 test('weekly hours, overrides and a second schedule persist', async ({
@@ -49,7 +49,7 @@ test('weekly hours, overrides and a second schedule persist', async ({
   // Three kinds of override: short day, closed, extra day.
   const addOverride = async (
     monthsAhead: number,
-    label: RegExp,
+    label: string,
     hours?: [string, string],
   ) => {
     await page.getByRole('button', { name: 'Add', exact: true }).click()
@@ -66,16 +66,12 @@ test('weekly hours, overrides and a second schedule persist', async ({
   target.setMonth(target.getMonth() + 13, 1)
   const dayLabel = (day: number) => {
     const d = new Date(target.getFullYear(), target.getMonth(), day)
-    const dayName = d.toLocaleDateString('en-US', { weekday: 'long' })
-    const month = d.toLocaleDateString('en-US', { month: 'long' })
-    const ord = (n: number) => {
-      const suffix =
-        n % 100 >= 11 && n % 100 <= 13
-          ? 'th'
-          : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')
-      return `${n}${suffix}`
-    }
-    return new RegExp(`${dayName}, ${month} ${ord(day)}, ${d.getFullYear()}`)
+    return d.toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    })
   }
   // Find a Wednesday (open, short day), a Sunday (closed, extra day) and a Tuesday (closed override).
   const dayOf = (weekday: number) => {

@@ -22,6 +22,7 @@ import {
   type MockScenario,
 } from '@openslots/react/testing'
 import { addDays, localDateOf } from '@openslots/core'
+import { Check } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 
 import { Logo } from '@/components/custom/logo'
@@ -214,6 +215,7 @@ function FlowStates() {
               value={s.id}
               className="px-3 font-mono text-xs"
             >
+              {s.id === state ? <Check aria-hidden="true" /> : null}
               {s.label}
             </ToggleGroupItem>
           ))}
