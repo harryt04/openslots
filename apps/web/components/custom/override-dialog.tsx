@@ -22,11 +22,7 @@ import {
   validateOverrideDraft,
   type RangeText,
 } from '@/lib/schedules/draft'
-import {
-  dateFromLocalDate,
-  formatDate,
-  localDateFromDate,
-} from '@/lib/schedules/time'
+import { formatDate } from '@/lib/schedules/time'
 import type { ScheduleOverride } from '@openslots/core'
 
 type Props = {
@@ -109,13 +105,14 @@ function OverrideForm({
                 // Days of the neighbouring months are drawn too faintly to read
                 // (3.4:1 in light mode); the month arrows reach them instead.
                 showOutsideDays={false}
-                selected={date ? dateFromLocalDate(date) : undefined}
-                defaultMonth={dateFromLocalDate(date ?? today)}
-                onSelect={(d) => setDate(d ? localDateFromDate(d) : null)}
-                disabled={[
-                  { before: dateFromLocalDate(today) },
-                  ...takenDates.map(dateFromLocalDate),
-                ]}
+                value={date}
+                today={today}
+                defaultMonth={(date ?? today).slice(0, 7)}
+                deselectable
+                onValueChange={(value) =>
+                  setDate(typeof value === 'string' ? value : null)
+                }
+                unavailable={[{ before: today }, ...takenDates]}
                 aria-labelledby="override-date-label"
               />
             </div>

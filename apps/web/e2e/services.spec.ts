@@ -19,8 +19,15 @@ async function signInWithBusiness(page: Page, name: string) {
 }
 
 async function pick(page: Page, label: string, option: string) {
-  await page.getByRole('combobox', { name: label }).click()
-  await page.getByRole('option', { name: option, exact: true }).click()
+  const trigger = page.getByRole('combobox', { name: label })
+  await trigger.click()
+  // The previous select's list can still be animating out, so look for the
+  // option only in the list this trigger controls.
+  const list = await trigger.getAttribute('aria-controls')
+  await page
+    .locator(`[id="${list}"]`)
+    .getByRole('option', { name: option, exact: true })
+    .click()
 }
 
 test('create, list, pause and edit a service with a live preview', async ({

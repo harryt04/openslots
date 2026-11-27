@@ -164,7 +164,11 @@ export function BusinessForm({
               <FormLabel>Time zone</FormLabel>
               <Select
                 value={field.value}
+                name={field.name}
+                required
+                items={zones}
                 onValueChange={(value) => {
+                  if (value === null) return
                   zoneTouched.current = true
                   field.onChange(value)
                 }}

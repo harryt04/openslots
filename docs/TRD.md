@@ -10,7 +10,7 @@ Items marked **Verify** are believed correct but must be confirmed against curre
 | --- | --- |
 | Runtime | Node.js 26, pnpm 11 (pinned in `package.json`), committed `pnpm-lock.yaml` |
 | App | Next.js 16 App Router, React, TypeScript strict. `proxy.ts`, not `middleware.ts` |
-| UI | Local new-york wrappers on UI SDK and retained Radix primitives (see AGENTS.md), Tailwind CSS v4, Geist and Geist Mono (the self-hosted `geist` package, no font CDN), lucide-react, next-themes. React 19 in the app |
+| UI | Local new-york wrappers on UI SDK `0.1.0-beta.17` (`@ui-sdk/react` and `@ui-sdk/core`, pinned exactly; see AGENTS.md), Tailwind CSS v4, Geist and Geist Mono (the self-hosted `geist` package, no font CDN), lucide-react, next-themes. React 19 in the app |
 | Forms and validation | react-hook-form, zod |
 | Auth | Better Auth, Google social provider only, MongoDB adapter |
 | Database | MongoDB, native driver. Must work on a standalone server: **no multi-document transactions** |

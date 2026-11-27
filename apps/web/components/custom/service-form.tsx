@@ -340,7 +340,7 @@ export function ServiceForm({
                           <ToggleGroupItem
                             key={v}
                             value={v}
-                            className="h-[30px] rounded-full px-3 font-mono text-[12.5px] data-[spacing=2]:rounded-full data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                            className="h-[30px] rounded-full px-3 font-mono text-[12.5px] data-checked:border-primary data-checked:bg-primary data-checked:text-primary-foreground data-[spacing=2]:rounded-full"
                           >
                             {on ? <Check aria-hidden="true" /> : null}
                             {v === CUSTOM ? (
@@ -446,7 +446,16 @@ export function ServiceForm({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Uses schedule</FormLabel>
-                    <Select value={field.value} onValueChange={field.onChange}>
+                    <Select
+                      value={field.value || null}
+                      name={field.name}
+                      required
+                      items={schedules.map((s) => ({
+                        value: s.id,
+                        label: `${s.name} (${s.days})`,
+                      }))}
+                      onValueChange={field.onChange}
+                    >
                       <FormControl>
                         <SelectTrigger className="w-full">
                           <SelectValue placeholder="Choose a schedule" />
@@ -591,8 +600,15 @@ function NumberSelect({
             <FormLabel>{label}</FormLabel>
             <Select
               value={value === undefined ? NO_LIMIT : String(value)}
+              name={field.name}
+              items={[
+                ...(optional ? [{ value: NO_LIMIT, label: optional }] : []),
+                ...all.map((o) => ({ value: String(o.value), label: o.label })),
+              ]}
               onValueChange={(v) =>
-                field.onChange(v === NO_LIMIT ? undefined : Number(v))
+                field.onChange(
+                  v === null || v === NO_LIMIT ? undefined : Number(v),
+                )
               }
             >
               <FormControl>

@@ -16,20 +16,22 @@ export function ThemeSwitcher() {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon" aria-label="Change color mode">
-          <Sun className="dark:hidden" />
-          <Moon className="hidden dark:block" />
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button variant="outline" size="icon" aria-label="Change color mode">
+            <Sun className="dark:hidden" />
+            <Moon className="hidden dark:block" />
+          </Button>
+        }
+      />
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={() => setTheme('light')}>
+        <DropdownMenuItem value="light" onSelect={() => setTheme('light')}>
           <Sun /> Light
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme('dark')}>
+        <DropdownMenuItem value="dark" onSelect={() => setTheme('dark')}>
           <Moon /> Dark
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme('system')}>
+        <DropdownMenuItem value="system" onSelect={() => setTheme('system')}>
           <Monitor /> System
         </DropdownMenuItem>
       </DropdownMenuContent>
